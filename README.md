@@ -27,8 +27,8 @@ make TOOLCHAIN=/path/to/toolchain
 This makes `build/fm1/hello.app` and `build/smk37/hello.app`. The apps use m-bootloader's drivers, which come in as the `m-bootloader` submodule.
 
 `make release` makes what a release carries, in `build/release`. The on-device store installs from these:
-- **`<app>-<board>.tar`:** an app's folder for `/MBOOT/APPS/<APP>/`, such as `mp3-smk37.tar` with `BOOT.APP`, `META.TXT` and `ICON.QOI`.
-- **`mboot-<board>.tar`:** `MENU.BIN` and `LAUNCH.BIN` for `/MBOOT`.
+- **`<app>-<board>.tar`:** an app's folder for `/MBOOT/APPS/<APP>/`, such as `mp3-smk37.tar` with `BOOT.APP`, `META.TXT`, `ICON.QOI` and `NOTICE.TXT` (see [License](#license)).
+- **`mboot-<board>.tar`:** `MENU.BIN`, `LAUNCH.BIN` and the launcher's `NOTICE.TXT` for `/MBOOT`.
 - **`SHA256SUMS`.**
 
 Each tar is plain ustar, made by `tools/app_tar.py`. Every name is 8.3 in capitals, as the kit's card code writes them, and the same files always make the same bytes. CI builds and tests every push, and a `v*` tag publishes a release with these files.
@@ -122,10 +122,11 @@ Each app has a folder of its own in `/MBOOT/APPS`, as the Homebrew Channel has t
 /MBOOT/APPS/MP3/BOOT.APP
 /MBOOT/APPS/MP3/ICON.QOI
 /MBOOT/APPS/MP3/META.TXT
+/MBOOT/APPS/MP3/NOTICE.TXT     its licences, if it has code or a font under another licence
 /MBOOT/APPS/MP3/...            the app's own files
 ```
 
-`make card BOARD=smk37` (or `fm1`) builds all of that in `build/smk37/card/MBOOT`, for these apps: hello, usbdisk, slots, tone and mp3. Copy it to the card's root.
+`make card BOARD=smk37` (or `fm1`) builds all of that in `build/smk37/card/MBOOT`, for these apps: hello, usbdisk, slots, tone, mp3 and unbrick. Copy it to the card's root.
 
 `META.TXT` is plain text, lines of `key=value`, and every line is optional:
 
@@ -167,6 +168,16 @@ A player in the look of the 90s desktop players: a main window with segment digi
 - **The length** comes from the frame count in a file's first frame if it has one, and otherwise from its size and bitrate. Seeking guesses where a second starts from the same.
 
 `apps/tone` is a smaller start: two tones, with the real sample rate in its log.
+
+### jpeg
+
+A test of the chip's JPEG decoder (`JL_JPG` at `0x41900`): it decodes five pictures built into it, shows each, and logs how long the decoder took. `apps/jpeg/jpeg_hw.c` drives it, polled. The register sequence was worked out from how JieLi's AC79 SDK drives it, and the code is written fresh. Its header says what the decoder takes.
+
+- **What it decodes:** baseline JPEG with three components, 4:2:0, 4:2:2 or 4:4:4, a width that's a multiple of 16 (8 for 4:4:4). One row of MCUs per start, into planar Y, Cb and Cr. Not handled: restart markers, a file bigger than RAM, progressive and greyscale (the hardware can't do those).
+- **Speed** on the FM-1 from `run-ram` (CPU 96 MHz): 240 x 240 in 1.5 ms (4:2:0), 2.0 ms (4:2:2) and 2.8 ms (4:4:4), and 480 x 320 4:2:0 in 3.7 ms. Turning that into RGB for the screen, one line at a time in C, took about 170 ms, so that's the part to speed up.
+- **The pictures** are drawn by `apps/jpeg/images.py`, which writes `images.h`. With a second argument it also saves the JPEGs, to compare a decode with on a computer: a build with `jpeg_CFLAGS=-DDUMP=n` leaves picture n's planes in RAM. For 4:4:4 they came within 3 levels of Pillow's.
+
+It's a test for now, not on the card.
 
 ### slots
 
@@ -210,6 +221,14 @@ A write has reached the card before the computer is told it succeeded, and data 
 - Spotlight can hold the disk for a while, so Eject may be refused at first. It took 38 s in testing. The app ends once the eject goes through.
 - macOS adds its own hidden `.Spotlight-V100` and `.fseventsd` folders to the card.
 
+### unbrick
+
+[M-Unbricker](https://github.com/jvitkauskas/m-unbricker), from the card: it repairs a broken FM-1 or SMK-37 with this one and a USB-C cable, with no computer. It guides you on the screen: move the cable to the broken unit and switch that on, and it puts its ROM in download mode with JieLi's USB_KEY, writes a fresh m-bootloader, erases the rest, and checks it. Either model can repair either.
+
+It's its own repo, here as the `m-unbricker` submodule, and its own Makefile builds it: what it makes is already an app, so `make` copies it to `build/<board>/unbrick.app`, and `make card` puts it in `/MBOOT/APPS/UNBRICK`. To update it, move the submodule. The launcher starts it with the LSB clock, as m-bootloader's MIDI mode does, which it already handles. It doesn't return: at the end it restarts the unit.
+
+Started from the launcher on a unit with a card mod, it has repaired an FM-1 from an SMK-37 Pro and an SMK-37 Pro from an FM-1.
+
 ### wifi
 
 Keeps the WiFi networks the card's apps join, in `/MBOOT/WIFI.TXT`, and tests them. It needs a card mod, and `picker` to start it: `make card` puts it in `/MBOOT/APPS/WIFI`. One file runs on both boards.
@@ -247,5 +266,10 @@ MIT, as m-bootloader is. See [LICENSE](LICENSE). Some parts have their own licen
 - `apps/mp3/minimp3.h` is [minimp3](https://github.com/lieff/minimp3), CC0-1.0.
 - `kit/keys.c` and `kit/keys.h` are MPL-2.0, from felucca-bsp's key tables (`boards/fm1/fm1_input.h` and `boards/smk37/fm1_input.h`).
 - `kit/textentry.c` and `kit/textentry.h` are MPL-2.0, adapted from Charles Vestal's [fm1-radio](https://github.com/charlesvestal/fm1-radio) password page.
+- `unbrick` is built from the `m-unbricker` submodule (MIT). It holds glyphs rendered from DejaVu Sans (Bitstream Vera licence and public domain), and its own list in `m-unbricker/THIRD-PARTY.md`.
 - `apps/wifi`'s radio and WiFi stack are from fm1-base and felucca-bsp: MPL-2.0, "GPL-3.0-only OR MPL-2.0" (taken here as MPL-2.0), and Apache-2.0 for three files from JieLi's SDK. `apps/wifi/net.c` is MPL-2.0, as it follows fm1-base's `wifi_own.c`. `apps/wifi/bsp/README.md` lists them.
-- `kit/font.h` is Barlow Semi Condensed, under the SIL Open Font License 1.1 (`kit/Barlow-OFL.txt`), as 4-bit alpha made by fm1-base's `tools/gen_font.py`.
+- `kit/font.h` is Barlow Semi Condensed, under the SIL Open Font License 1.1 (`LICENSES/OFL-1.1-Barlow.txt`), as 4-bit alpha made by fm1-base's `tools/gen_font.py`.
+
+The MPL-2.0 and Apache-2.0 texts are in `LICENSES/`, with the font's licence.
+
+**A built app carries its own notice.** An app with any of these in it has a `NOTICE.TXT` beside it on the card and in its release tar, as these licences ask of a copy given to someone: what's under which licence, by whom, a link to the source it was built from, and the font licences in full. `make card` writes it from `apps/<app>/NOTICE.TXT`, with `@SOURCE@` made the commit's (or tag's) address, then each file in `<app>_LICENSES` in the `Makefile`. The launcher's is `apps/picker/NOTICE.TXT`, in `/MBOOT`. Today these have one: `tone` and `mp3` (MPL-2.0 sound output; `mp3` also credits minimp3), `slots` (MPL-2.0 keys and typing, the Barlow font), `usbdisk` and the launcher (the Barlow font), `unbrick` (the DejaVu glyphs), and `wifi` (the MPL-2.0 and Apache-2.0 radio and WiFi stack, keys and typing, the Barlow font; the Apache-2.0 text in full). An app using none of them needs no notice: `hello`, `crashtest`, `hangtest` and `jpeg` are MIT throughout.

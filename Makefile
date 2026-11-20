@@ -12,7 +12,7 @@ CFLAGS := -target pi32v2 -mcpu=r3 -std=c99 -Oz -ffreestanding -fno-builtin -fno-
 	-Wall -Wextra -Werror -flto -DRAM_STAGE -Ikit -I$(MB)/include
 # The drivers apps get from m-bootloader. --gc-sections drops what an app doesn't use.
 DRIVERS := core platform display board runtime usb_midi
-APPS := hello crashtest hangtest usbdisk slots tone mp3 wifi
+APPS := hello crashtest hangtest usbdisk slots tone mp3 jpeg wifi
 # Built once more as universal apps, in build/any.
 UNIVERSAL_APPS := hello usbdisk slots mp3 wifi
 # A stack for each app's C code. An app can override it: <name>_STACK := 0x8000
@@ -36,7 +36,7 @@ picker_ORIGIN := 0x1c0a800
 picker_LENGTH := 0xc000
 picker_STACK := 0x2000
 
-all: $(foreach a,$(APPS),build/fm1/$(a).app build/smk37/$(a).app) $(foreach a,$(UNIVERSAL_APPS),build/any/$(a).app) build/any/MENU.BIN build/any/LAUNCH.BIN build/fm1/logread.bin build/smk37/logread.bin build/fm1/MENU.BIN build/smk37/MENU.BIN build/fm1/LAUNCH.BIN build/smk37/LAUNCH.BIN
+all: $(foreach a,$(APPS) unbrick,build/fm1/$(a).app build/smk37/$(a).app) $(foreach a,$(UNIVERSAL_APPS) unbrick,build/any/$(a).app) build/any/MENU.BIN build/any/LAUNCH.BIN build/fm1/logread.bin build/smk37/logread.bin build/fm1/MENU.BIN build/smk37/MENU.BIN build/fm1/LAUNCH.BIN build/smk37/LAUNCH.BIN
 
 clean:
 	rm -rf build
@@ -114,18 +114,40 @@ build/%/LAUNCH.BIN: build/%/picker.elf tools/launch.py
 	$(OBJCOPY) -O binary -j .text $< build/$*/picker.raw
 	python3 tools/launch.py $* build/$*/picker.raw $@
 
+# M-Unbricker is its own repo, here as the m-unbricker submodule, and its own Makefile builds it: what it makes is
+# already an app. It's on the card as /MBOOT/APPS/UNBRICK, with apps/unbrick's META.TXT and ICON.QOI.
+build/%/unbrick.app: FORCE
+	@mkdir -p $(@D)
+	$(MAKE) -C m-unbricker TOOLCHAIN=$(abspath $(TOOLCHAIN)) build/m-unbricker-$*.bin
+	cp m-unbricker/build/m-unbricker-$*.bin $@
+FORCE:
+.PHONY: FORCE
+
+# What an app with code or a font under another licence carries beside it, as NOTICE.TXT: apps/<app>/NOTICE.TXT (the
+# launcher's is apps/picker's) with @SOURCE@ made where its source is, then each licence in <app>_LICENSES.
+SOURCE := https://github.com/jvitkauskas/m-apps/tree/$(shell git describe --tags --exact-match 2>/dev/null || git rev-parse HEAD 2>/dev/null || echo main)
+slots_LICENSES := LICENSES/OFL-1.1-Barlow.txt
+usbdisk_LICENSES := LICENSES/OFL-1.1-Barlow.txt
+picker_LICENSES := LICENSES/OFL-1.1-Barlow.txt
+unbrick_LICENSES := m-unbricker/web/LICENSES/DejaVu-fonts.txt
+wifi_LICENSES := LICENSES/Apache-2.0.txt LICENSES/OFL-1.1-Barlow.txt
+notice = sed 's|@SOURCE@|$(SOURCE)|' apps/$(1)/NOTICE.TXT > $(2); for l in $($(1)_LICENSES); do printf '\n' >> $(2); cat $$l >> $(2); done
+
 # make card BOARD=smk37: build/smk37/card/MBOOT, the launcher and these apps in their folders, to copy to a card.
-CARD_APPS := hello usbdisk slots tone mp3 wifi
+CARD_APPS := hello usbdisk slots tone mp3 unbrick wifi
 card: build/$(BOARD)/MENU.BIN build/$(BOARD)/LAUNCH.BIN $(foreach a,$(CARD_APPS),build/$(BOARD)/$(a).app)
 	rm -rf build/$(BOARD)/card
 	mkdir -p build/$(BOARD)/card/MBOOT/APPS
 	cp build/$(BOARD)/MENU.BIN build/$(BOARD)/LAUNCH.BIN build/$(BOARD)/card/MBOOT/
+	$(call notice,picker,build/$(BOARD)/card/MBOOT/NOTICE.TXT)
 	$(foreach a,$(CARD_APPS),d=build/$(BOARD)/card/MBOOT/APPS/$$(echo $(a) | tr a-z A-Z); mkdir -p $$d; \
 		cp build/$(BOARD)/$(a).app $$d/BOOT.APP; cp apps/$(a)/META.TXT $$d/; \
-		if [ -f apps/$(a)/ICON.QOI ]; then cp apps/$(a)/ICON.QOI $$d/; fi;)
+		if [ -f apps/$(a)/ICON.QOI ]; then cp apps/$(a)/ICON.QOI $$d/; fi; \
+		if [ -f apps/$(a)/NOTICE.TXT ]; then $(call notice,$(a),$$d/NOTICE.TXT); fi;)
 
 # make release: build/release, what a release carries for the store: <app>-<board>.tar, an app's folder for
-# /MBOOT/APPS/<APP>/, and mboot-<board>.tar, MENU.BIN and LAUNCH.BIN for /MBOOT, each a plain tar (tools/app_tar.py),
+# /MBOOT/APPS/<APP>/, and mboot-<board>.tar, MENU.BIN, LAUNCH.BIN and the launcher's NOTICE.TXT for /MBOOT, each a
+# plain tar (tools/app_tar.py),
 # and SHA256SUMS.
 BOARDS := fm1 smk37
 release:
@@ -136,7 +158,7 @@ release:
 		for a in $(CARD_APPS); do \
 			python3 tools/app_tar.py build/release/$$a-$$b.tar build/$$b/card/MBOOT/APPS/$$(echo $$a | tr a-z A-Z); \
 		done; \
-		rm -rf build/$$b/mboot; mkdir -p build/$$b/mboot; cp build/$$b/MENU.BIN build/$$b/LAUNCH.BIN build/$$b/mboot/; \
+		rm -rf build/$$b/mboot; mkdir -p build/$$b/mboot; cp build/$$b/MENU.BIN build/$$b/LAUNCH.BIN build/$$b/card/MBOOT/NOTICE.TXT build/$$b/mboot/; \
 		python3 tools/app_tar.py build/release/mboot-$$b.tar build/$$b/mboot; \
 	done
 	cd build/release && ls *.tar | LC_ALL=C sort | xargs sha256sum > SHA256SUMS
