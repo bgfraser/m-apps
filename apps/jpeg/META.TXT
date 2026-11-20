@@ -1,0 +1,3 @@
+name=JPEG Test
+about=Tries the hardware JPEG decoder
+version=0.1

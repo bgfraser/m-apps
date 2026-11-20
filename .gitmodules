@@ -2,3 +2,7 @@
 	path = m-bootloader
 	url = https://github.com/jvitkauskas/m-bootloader.git
 	branch = main
+[submodule "m-unbricker"]
+	path = m-unbricker
+	url = https://github.com/jvitkauskas/m-unbricker.git
+	branch = main

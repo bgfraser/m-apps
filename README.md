@@ -168,6 +168,16 @@ A player in the look of the 90s desktop players: a main window with segment digi
 
 `apps/tone` is a smaller start: two tones, with the real sample rate in its log.
 
+### jpeg
+
+A test of the chip's JPEG decoder (`JL_JPG` at `0x41900`): it decodes five pictures built into it, shows each, and logs how long the decoder took. `apps/jpeg/jpeg_hw.c` drives it, polled. The register sequence was worked out from how JieLi's AC79 SDK drives it, and the code is written fresh. Its header says what the decoder takes.
+
+- **What it decodes:** baseline JPEG with three components, 4:2:0, 4:2:2 or 4:4:4, a width that's a multiple of 16 (8 for 4:4:4). One row of MCUs per start, into planar Y, Cb and Cr. Not handled: restart markers, a file bigger than RAM, progressive and greyscale (the hardware can't do those).
+- **Speed** on the FM-1 from `run-ram` (CPU 96 MHz): 240 x 240 in 1.5 ms (4:2:0), 2.0 ms (4:2:2) and 2.8 ms (4:4:4), and 480 x 320 4:2:0 in 3.7 ms. Turning that into RGB for the screen, one line at a time in C, took about 170 ms, so that's the part to speed up.
+- **The pictures** are drawn by `apps/jpeg/images.py`, which writes `images.h`. With a second argument it also saves the JPEGs, to compare a decode with on a computer: a build with `jpeg_CFLAGS=-DDUMP=n` leaves picture n's planes in RAM. For 4:4:4 they came within 3 levels of Pillow's.
+
+It's a test for now, not on the card.
+
 ### slots
 
 Keeps firmware and its settings on the card, and swaps between them with no computer. It needs a card mod, and `picker` to start it: `make card` puts it in `/MBOOT/APPS/SLOTS`.
@@ -210,6 +220,14 @@ A write has reached the card before the computer is told it succeeded, and data 
 - Spotlight can hold the disk for a while, so Eject may be refused at first. It took 38 s in testing. The app ends once the eject goes through.
 - macOS adds its own hidden `.Spotlight-V100` and `.fseventsd` folders to the card.
 
+### unbrick
+
+[M-Unbricker](https://github.com/jvitkauskas/m-unbricker), from the card: it repairs a broken FM-1 or SMK-37 with this one and a USB-C cable, with no computer. It guides you on the screen: move the cable to the broken unit and switch that on, and it puts its ROM in download mode with JieLi's USB_KEY, writes a fresh m-bootloader, erases the rest, and checks it. Either model can repair either.
+
+It's its own repo, here as the `m-unbricker` submodule, and its own Makefile builds it: what it makes is already an app, so `make` copies it to `build/<board>/unbrick.app`, and `make card` puts it in `/MBOOT/APPS/UNBRICK`. To update it, move the submodule. The launcher starts it with the LSB clock, as m-bootloader's MIDI mode does, which it already handles. It doesn't return: at the end it restarts the unit.
+
+Started from the launcher on a unit with a card mod, it has repaired an FM-1 from an SMK-37 Pro and an SMK-37 Pro from an FM-1.
+
 ## License
 
 MIT, as m-bootloader is. See [LICENSE](LICENSE). Some parts have their own licences, and each file's header says which:
@@ -218,4 +236,5 @@ MIT, as m-bootloader is. See [LICENSE](LICENSE). Some parts have their own licen
 - `apps/mp3/minimp3.h` is [minimp3](https://github.com/lieff/minimp3), CC0-1.0.
 - `kit/keys.c` and `kit/keys.h` are MPL-2.0, from felucca-bsp's key tables (`boards/fm1/fm1_input.h` and `boards/smk37/fm1_input.h`).
 - `kit/textentry.c` and `kit/textentry.h` are MPL-2.0, adapted from Charles Vestal's [fm1-radio](https://github.com/charlesvestal/fm1-radio) password page.
+- `unbrick` is built from the `m-unbricker` submodule (MIT). It holds glyphs rendered from DejaVu Sans (Bitstream Vera licence and public domain), and its own list in `m-unbricker/THIRD-PARTY.md`.
 - `kit/font.h` is Barlow Semi Condensed, under the SIL Open Font License 1.1 (`kit/Barlow-OFL.txt`), as 4-bit alpha made by fm1-base's `tools/gen_font.py`.
