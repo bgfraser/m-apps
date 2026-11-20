@@ -31,7 +31,7 @@ bool card_write(uint32_t sector, const uint8_t *data) {
 
 int LLVMFuzzerTestOneInput(const uint8_t *data, size_t n);
 int LLVMFuzzerTestOneInput(const uint8_t *data, size_t n) {
-    if (n > 64*1024)
+    if (n > 96*1024)
         return 0;
     sectors = (uint32_t)((n+511)/512);
     image = calloc(sectors ? sectors : 1, 512);
@@ -54,16 +54,30 @@ int LLVMFuzzerTestOneInput(const uint8_t *data, size_t n) {
             static struct catalog c;
             catalog_read(folder, &c);
         }
+        /* A file written, as an app saves: a new one that reports success must read back as written. (A replaced one is
+         * written too, but not checked: on a damaged FAT that had the old file's clusters free, the new file can be
+         * given them and then lose them as the old chain is freed, which kit/fat.c only partly guards against.) */
         uint32_t start;
         if (!fat_reserve(1000, &start)) {
-            static uint8_t block[1024];
-            if (fat_write(start, 0, block, sizeof block)) {
-                if (found)
-                    fat_swap(root, "WIFI    TXT", start, 1000);
-                else
-                    fat_add(root, "NEW     TXT", FAT_ATTR_ARCHIVE, start, 1000);
+            static uint8_t block[1024], back[1000];
+            for (unsigned i = 0; i < sizeof block; ++i)
+                block[i] = (uint8_t)(i*7+1);
+            /* Replaced if it's there (fat_add() is for a name the folder doesn't have), as the WiFi app saves. */
+            const char *name = found ? "WIFI    TXT" : "NEW     TXT";
+            bool exists = found;
+            if (!found && fat_find(root, name, 0, &exists))
+                exists = true;
+            if (fat_write(start, 0, block, sizeof block) &&
+                !(exists ? fat_swap(root, name, start, 1000) : fat_add(root, name, FAT_ATTR_ARCHIVE, start, 1000)) &&
+                !fat_commit() && !exists) {
+                struct fat_entry written;
+                bool there = false;
+                if (fat_find(root, name, &written, &there) || !there || written.size != 1000 ||
+                    !fat_read(&written, 0, back, sizeof back) || memcmp(back, block, sizeof back)) {
+                    fprintf(stderr, "a file written isn't read back as written\n");
+                    abort();
+                }
             }
-            fat_commit();
         }
     }
     free(image);

@@ -23,7 +23,8 @@ int LLVMFuzzerTestOneInput(const uint8_t *data, size_t n) {
     memcpy(text.name, "HELLO", 6);
     text.about[0] = text.version[0] = 0;
     app_meta_parse(copy, (uint32_t)n, &text);
-    /* Each a C string within its field. */
+    /* Each a C string within its field. (A value spilling into the next field would stay inside the struct, where the
+     * sanitizers can't see it; that needs a model of the parser, which this doesn't have.) */
     assert(memchr(text.name, 0, sizeof text.name) && memchr(text.about, 0, sizeof text.about) &&
            memchr(text.version, 0, sizeof text.version));
     free(copy);

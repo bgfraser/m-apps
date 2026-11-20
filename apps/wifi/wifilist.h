@@ -17,7 +17,7 @@
  * so are settings it doesn't know. Line ends may be LF or CRLF, and a UTF-8 byte order mark at the start is skipped.
  *
  * A name is 1 to 32 bytes and a password 8 to 63 characters (WPA2-PSK), or none for an open network. A name given
- * twice: the first that can be joined counts. Pure data, so it builds on a computer too (tests/wifi_list_test.py). */
+ * twice: the first that can be joined counts; a password given twice, the last. Pure data, so it builds on a computer too (tests/wifi_list_test.py). */
 #ifndef WIFILIST_H
 #define WIFILIST_H
 #include <stdbool.h>

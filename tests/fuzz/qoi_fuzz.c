@@ -13,9 +13,14 @@ int LLVMFuzzerTestOneInput(const uint8_t *data, size_t n) {
     memcpy(copy, data, n);
     /* Exactly the pixels an icon of MAX x MAX can have, so that a write past them is caught. */
     uint8_t *out = malloc(MAX*MAX*4);
+    memset(out, 0xa5, MAX*MAX*4);
     unsigned w = 0, h = 0;
-    if (qoi_decode(copy, (uint32_t)n, out, MAX, &w, &h))
+    if (qoi_decode(copy, (uint32_t)n, out, MAX, &w, &h)) {
         assert(w && h && w <= MAX && h <= MAX);
+        /* Nothing written past the picture's own pixels. */
+        for (unsigned i = w*h*4; i < MAX*MAX*4; ++i)
+            assert(out[i] == 0xa5);
+    }
     free(out);
     free(copy);
     return 0;

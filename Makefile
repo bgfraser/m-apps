@@ -58,14 +58,17 @@ test:
 	python3 tests/slots_screens_test.py
 	python3 tests/wifi_list_test.py
 	python3 tests/wifi_screens_test.py
+	python3 tests/jpeg_parse_test.py
 
 # make fuzz: the parsers of what comes from a card or the radio, fuzzed for FUZZ_SECONDS each (tests/fuzz_test.py). Needs
 # clang with libFuzzer (Debian: clang, libclang-rt-dev); without it, it says so and passes.
 FUZZ_SECONDS ?= 10
 # The computer's clang, not the pi32v2 one: FUZZ_CC=/usr/bin/clang when the toolchain's is first on PATH.
 FUZZ_CC ?= clang
+# FUZZ_REQUIRE=1: fail rather than skip without libFuzzer, as CI does.
+FUZZ_REQUIRE ?=
 fuzz:
-	FUZZ_CC=$(FUZZ_CC) python3 tests/fuzz_test.py $(FUZZ_SECONDS)
+	FUZZ_CC=$(FUZZ_CC) FUZZ_REQUIRE=$(FUZZ_REQUIRE) python3 tests/fuzz_test.py $(FUZZ_SECONDS)
 
 # make run APP=hello BOARD=fm1: start an app with run-ram, wait for it to end, and print its log.
 # make log BOARD=fm1: print the log an app left, however it was started.

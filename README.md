@@ -56,7 +56,7 @@ The exit status is 0 if the app returned 0, 1 if it returned something else, and
 
 ## Tests
 
-`make test` runs the host tests: the code that needs no hardware (the FAT, the launcher's catalog, screens, `WIFI.TXT`), built for the computer with AddressSanitizer and UBSan.
+`make test` runs the host tests: the code that needs no hardware (the FAT, the launcher's catalog, screens, `WIFI.TXT`, the JPEG headers), built for the computer with AddressSanitizer and UBSan.
 
 `make fuzz` fuzzes the parsers of whatever comes from a card or the radio, with libFuzzer, for `FUZZ_SECONDS` each (10 by default):
 - `jpeg`: the JPEG headers;
@@ -64,9 +64,9 @@ The exit status is 0 if the app returned 0, 1 if it returned something else, and
 - `fat`: the FAT code and the launcher's catalog on any card image;
 - `qoi`: the launcher's icons;
 - `meta`: `META.TXT`;
-- `frames`: beacons, data frames through to ARP, DHCP and UDP, and WPA2 key messages.
+- `frames`: beacons, data frames through to ARP, DHCP and UDP, and the station's management responses and WPA2 key messages, in each state it waits in.
 
-It needs clang with libFuzzer (on Debian, `clang` and `libclang-rt-dev`); without it, it says so and passes. A crash leaves the input that caused it in `build/fuzz/<name>/`; `build/fuzz/<name>/<name> <input>` runs it again. Parsers built for this need no hardware, so the code they need from an app is kept apart from it: `apps/wifi/frames.c`, and `JPEG_PARSE_ONLY` in `apps/jpeg/jpeg_hw.c`. A new parser of outside data gets a harness in `tests/fuzz/` and a line in `tests/fuzz_test.py`.
+It needs clang with libFuzzer (on Debian, `clang` and `libclang-rt-dev`; `FUZZ_CC` names one that isn't first on PATH); without it, it says so and passes, or fails with `FUZZ_REQUIRE=1`, as in CI. A crash leaves the input that caused it in `build/fuzz/<name>/`; `build/fuzz/<name>/<name> <input>` runs it again. Parsers built for this need no hardware, so the code they need from an app is kept apart from it: `apps/wifi/frames.c`, and `JPEG_PARSE_ONLY` in `apps/jpeg/jpeg_hw.c`. A new parser of outside data gets a harness in `tests/fuzz/` and a line in `tests/fuzz_test.py`.
 
 ## The log
 

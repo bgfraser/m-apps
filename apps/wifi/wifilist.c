@@ -122,7 +122,7 @@ void wifi_list_read(struct wifi_list *l, const char *text, unsigned n) {
     memset(l, 0, sizeof *l);
     char use[WIFI_SSID_MOST+1] = {0};
     bool have_use = false;
-    /* The network being read (0 while skipping one), and whether its password can't be. */
+    /* The network being read (0 while skipping one), and whether its (last) password can't be. */
     struct wifi_net *net = 0;
     bool bad = false;
     unsigned at = bom(text, n), start = at;
@@ -150,7 +150,8 @@ void wifi_list_read(struct wifi_list *l, const char *text, unsigned n) {
             net->in_file = true;
             net->at = start;
         } else if (is(&line, "password=", &value, &value_n)) {
-            if (net && !bad)
+            /* Given twice, the last counts. */
+            if (net)
                 bad = !copy(net->pass, WIFI_PASS_MOST, value, value_n) || !wifi_pass_ok(net->pass);
         } else if (is(&line, "use=", &value, &value_n)) {
             have_use = copy(use, WIFI_SSID_MOST, value, value_n);
@@ -171,6 +172,8 @@ struct out {
 };
 
 static void put_n(struct out *o, const char *s, unsigned k) {
+    if (!k)
+        return;
     if (!o->ok || o->n+k > o->most) {
         o->ok = false;
         return;
@@ -196,6 +199,24 @@ static void put_line(struct out *o, const struct line *l, const char *text, cons
     if (!o->n && l->s != text && bom(l->s, l->len))
         put(o, nl);
     put_n(o, l->s, l->whole);
+}
+
+/* Whether the network whose ssid= ends at at can be joined as it is: its last password= one that can be, as the reader
+ * has it (no password= is an open network). */
+static bool usable(const char *text, unsigned n, unsigned at) {
+    struct line line;
+    const char *value;
+    unsigned value_n;
+    char pass[WIFI_PASS_MOST+1];
+    bool ok = true;
+    while (next_line(text, n, &at, &line)) {
+        if (is(&line, "ssid=", &value, &value_n))
+            break;
+        /* The last password= counts, as the reader has it. */
+        if (is(&line, "password=", &value, &value_n))
+            ok = copy(pass, WIFI_PASS_MOST, value, value_n) && wifi_pass_ok(pass);
+    }
+    return ok;
 }
 
 /* Whether the network whose ssid= ends at at has a password= among its lines. */
@@ -243,9 +264,10 @@ bool wifi_list_write(const struct wifi_list *l, const char *old, unsigned old_n,
      * one leaves the file as it was. */
     unsigned blank_at = 0, after_blank = (unsigned)-1;
     for (unsigned start = at; o.ok && next_line(old, old_n, &at, &line); start = at) {
-        /* This line's own end, for a line rewritten in place. */
+        /* This line's own end, for a line rewritten in place: none for a last line with no LF (a lone CR there is no
+         * line end; the reader drops it). */
         const char *end = line.s+line.len;
-        unsigned end_n = line.whole-line.len;
+        unsigned end_n = line.whole > line.len && line.s[line.whole-1] == '\n' ? line.whole-line.len : 0;
         if (skipped_line(&line)) {
             unsigned before = o.n;
             put_line(&o, &line, old, nl);
@@ -260,8 +282,11 @@ bool wifi_list_write(const struct wifi_list *l, const char *old, unsigned old_n,
             char name[WIFI_SSID_MOST+1];
             bool named = copy(name, WIFI_SSID_MOST, value, value_n);
             int i = named ? wifi_list_find(l, name) : -1;
-            /* The copy that was read, if it was; a new one's first copy. */
-            if (i >= 0 && !written[i] && (!l->net[i].in_file || l->net[i].at == start)) {
+            /* Changed in place: the copy that was read; for one that wasn't read, the first copy that can be joined (one
+             * past the 12 the reader took), which the next read would take. One that can't be joined stays, and the
+             * network goes at the end. */
+            if (i >= 0 && !written[i] &&
+                (l->net[i].in_file ? l->net[i].at == start : wifi_ssid_ok(name) && usable(old, old_n, at))) {
                 mode = OURS;
                 ours = i;
                 written[i] = true;
@@ -298,8 +323,10 @@ bool wifi_list_write(const struct wifi_list *l, const char *old, unsigned old_n,
     bool add_use = use && !had_use && !use_added, adding = add_use;
     for (unsigned i = 0; i < l->count; ++i)
         adding |= !written[i];
+    /* A last line with no LF gets one. If it ends in a lone CR, which the reader drops, LF alone makes it the CRLF it
+     * drops; otherwise the file's line end. Either way the line reads as before. */
     if (adding && o.n && o.s[o.n-1] != '\n')
-        put(&o, nl);
+        put(&o, o.s[o.n-1] == '\r' ? "\n" : nl);
     if (add_use)
         put_setting(&o, "use=", use, nl, nl_n);
     for (unsigned i = 0; i < l->count; ++i)
@@ -327,11 +354,17 @@ int wifi_list_put(struct wifi_list *l, const char *ssid, const char *pass) {
     if (i < 0) {
         if (l->count == WIFI_MOST)
             return -1;
-        i = (int)l->count++;
+        /* Removed and put back: it's still in the file, where its password is changed, so it goes back to its place
+         * among the networks read. A new one goes at the end. */
+        int r = removed_at(l, ssid);
+        i = (int)l->count;
+        if (r >= 0)
+            for (i = 0; i < (int)l->count && l->net[i].in_file && l->net[i].at < l->removed[r].at; ++i)
+                ;
+        memmove(&l->net[i+1], &l->net[i], (l->count-(unsigned)i)*sizeof l->net[0]);
+        ++l->count;
         memset(&l->net[i], 0, sizeof l->net[i]);
         set(l->net[i].ssid, ssid);
-        /* Removed and put back: it's still in the file, where its password is changed. */
-        int r = removed_at(l, ssid);
         if (r >= 0) {
             l->net[i].in_file = true;
             l->net[i].at = l->removed[r].at;

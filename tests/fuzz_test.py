@@ -2,7 +2,7 @@
 """Fuzzes the parsers that read what comes from a card or a file, with libFuzzer, AddressSanitizer and UBSan, for a few
 seconds each (FUZZ_SECONDS). Needs clang with libFuzzer; without it, says so and passes. A crash leaves its input in
 build/fuzz/<name>/, and the run fails. tests/fuzz/found/<name>/ keeps the inputs that found a bug, which every run
-starts from.
+starts from. FUZZ_REQUIRE=1 makes a missing libFuzzer a failure (CI).
 
   fuzz_test.py [SECONDS] [NAME...]"""
 import os
@@ -30,19 +30,20 @@ def wifi_seeds(folder):
     (folder/'crlf.txt').write_bytes(b'\xef\xbb\xbf# x\r\nssid=A\r\n# its password\r\npassword=aaaaaaaa\r\nband=5\r\nuse=A')
 
 def fat_seeds(folder):
-    """A small FAT32 volume: one reserved sector, one FAT, clusters of a sector; /WIFI.TXT, a long name, and an app in
-    /MBOOT/APPS/HELLO with BOOT.APP, META.TXT and ICON.QOI."""
-    clusters, sector = 24, 512
-    image = bytearray((2+clusters)*sector)
+    """A small FAT32 volume: one reserved sector, one FAT of two sectors, clusters of a sector; /WIFI.TXT, a long-named
+    file of its own, a file whose clusters' FAT entries are in the second FAT sector, and an app in /MBOOT/APPS/HELLO
+    with BOOT.APP, META.TXT and ICON.QOI."""
+    clusters, sector, fat_sectors = 140, 512, 2
+    image = bytearray((1+fat_sectors+clusters)*sector)
     boot = image
     boot[0:3] = b'\xeb\x58\x90'
     struct.pack_into('<HBHB', boot, 11, sector, 1, 1, 1)
-    struct.pack_into('<IIHHIH', boot, 32, len(image)//sector, 1, 0, 0, 2, 0)
+    struct.pack_into('<IIHHIH', boot, 32, len(image)//sector, fat_sectors, 0, 0, 2, 0)
     boot[82:90] = b'FAT32   '
     boot[510:512] = b'\x55\xaa'
-    fat = [0x0ffffff8, 0x0fffffff] + [0]*(sector//4-2)
+    fat = [0x0ffffff8, 0x0fffffff] + [0]*(fat_sectors*sector//4-2)
     def at(c):
-        return (2+c-2)*sector
+        return (1+fat_sectors+c-2)*sector
     def entry(name, attr, start, size):
         return name.encode() + bytes([attr, 0, 0]) + bytes(6) + struct.pack('<H', start >> 16) + bytes(4) + \
             struct.pack('<HI', start & 0xffff, size)
@@ -68,8 +69,12 @@ def fat_seeds(folder):
             fat[c+k] = c+k+1 if k < chain-1 else 0x0fffffff
             image[at(c+k):at(c+k)+sector] = data[k*sector:(k+1)*sector].ljust(sector, b'\0')
     wifi = b'use=Home\n\nssid=Home\npassword=correct horse\n'
+    notes = b'Notes kept on the card.\n'*60
     put(2, entry('MBOOT      ', 0x10, 3, 0) + entry('WIFI    TXT', 0x20, 4, len(wifi)) +
-        lfn('A long name.txt', 'ALONGN~1TXT') + entry('ALONGN~1TXT', 0x20, 4, len(wifi)))
+        lfn('A long name.txt', 'ALONGN~1TXT') + entry('ALONGN~1TXT', 0x20, 11, len(wifi)) +
+        entry('NOTES   TXT', 0x20, 130, len(notes)))
+    put(11, wifi)
+    put(130, notes, 3)
     put(3, entry('.          ', 0x10, 3, 0) + entry('..         ', 0x10, 0, 0) + entry('APPS       ', 0x10, 5, 0))
     put(4, wifi)
     put(5, entry('.          ', 0x10, 5, 0) + entry('..         ', 0x10, 3, 0) + entry('HELLO      ', 0x10, 6, 0))
@@ -81,7 +86,7 @@ def fat_seeds(folder):
     put(7, app, 2)
     put(9, meta)
     put(10, icon)
-    image[sector:2*sector] = struct.pack(f'<{sector//4}I', *fat)
+    image[sector:(1+fat_sectors)*sector] = struct.pack(f'<{fat_sectors*sector//4}I', *fat)
     (folder/'card.img').write_bytes(bytes(image))
 
 def qoi_seeds(folder):
@@ -117,6 +122,11 @@ def frames_seeds(folder):
     arp = struct.pack('>HHBBH', 1, 0x800, 6, 4, 1) + bytes([0x10, 0x20, 0x30, 0x40, 0x50, 0x60, 192, 168, 1, 1]) + \
         bytes(6) + bytes([192, 168, 1, 5])
     (folder/'arp').write_bytes(b'\x08' + hdr + llc + b'\x08\x06' + arp)
+    mgmt = lambda fc: bytes([fc, 0]) + bytes(2) + bytes([2, 0x11, 0x22, 0x33, 0x44, 0x55]) + \
+        bytes([0x10, 0x20, 0x30, 0x40, 0x50, 0x60])*2 + bytes(2)
+    (folder/'auth').write_bytes(bytes([0x00]) + mgmt(0xb0) + struct.pack('<HHH', 0, 2, 0))
+    (folder/'assoc').write_bytes(bytes([0x10]) + mgmt(0x10) + struct.pack('<HHH', 0x11, 0, 0xc001) +
+                                 bytes([1, 4, 0x82, 0x84, 0x8b, 0x96]))
     key = bytes([2, 3, 0, 95, 2, 0x00, 0x8a, 0, 16]) + bytes(8) + bytes(range(32)) + bytes(16+8+8+16+2)
     (folder/'eapol').write_bytes(b'\x00' + hdr + llc + b'\x88\x8e' + key)
 
@@ -129,7 +139,7 @@ FUZZERS = {
     'meta': (['tests/fuzz/meta_fuzz.c', 'kit/load.c', 'm-bootloader/src/core.c'],
              ['-Ikit', '-Iapps/picker', '-idirafter', 'm-bootloader/include', '-DPLATFORM_SIM'], meta_seeds),
     'fat': (['tests/fuzz/fat_fuzz.c', 'kit/fat.c', 'kit/load.c', 'apps/picker/catalog.c', 'm-bootloader/src/core.c'],
-            ['-Ikit', '-Iapps/picker', '-idirafter', 'm-bootloader/include', '-DPLATFORM_SIM'], fat_seeds),
+            ['-Ikit', '-Iapps/picker', '-idirafter', 'm-bootloader/include', '-DPLATFORM_SIM'], fat_seeds, 96*1024),
 }
 
 def main():
@@ -139,12 +149,19 @@ def main():
     probe = OUT/'probe'
     OUT.mkdir(parents=True, exist_ok=True)
     (OUT/'probe.c').write_text('#include <stddef.h>\n#include <stdint.h>\nint LLVMFuzzerTestOneInput(const uint8_t *d, size_t n) { return 0; }\n')
-    if not shutil.which(CC) or subprocess.run([CC, *FLAGS, OUT/'probe.c', '-o', probe], capture_output=True).returncode:
+    probing = subprocess.run([CC, *FLAGS, OUT/'probe.c', '-o', probe], capture_output=True, text=True) \
+        if shutil.which(CC) else None
+    if not probing or probing.returncode:
         print(f'fuzz: skipped, {CC} with libFuzzer not found (FUZZ_CC names another clang)')
+        if probing:
+            print(probing.stderr[-2000:])
+        # FUZZ_REQUIRE=1 (CI): no fuzzing is a failure, not a pass.
+        if os.environ.get('FUZZ_REQUIRE') == '1':
+            sys.exit(1)
         return
     failed = []
     for name in names:
-        sources, flags, seeds = FUZZERS[name]
+        sources, flags, seeds, *most = FUZZERS[name]
         folder = OUT/name
         corpus = folder/'corpus'
         corpus.mkdir(parents=True, exist_ok=True)
@@ -154,7 +171,7 @@ def main():
             shutil.copy(found, corpus/found.name)
         binary = folder/name
         subprocess.run([CC, *FLAGS, *flags, *[ROOT/s for s in sources], '-o', binary], check=True, cwd=ROOT)
-        run = subprocess.run([binary, corpus, f'-max_total_time={seconds}', '-max_len=16384', '-timeout=10', f'-artifact_prefix={folder}/',
+        run = subprocess.run([binary, corpus, f'-max_total_time={seconds}', f'-max_len={most[0] if most else 16384}', '-timeout=10', f'-artifact_prefix={folder}/',
                               '-print_final_stats=1'], capture_output=True, text=True)
         stats = [l for l in run.stderr.splitlines() if l.startswith('stat::number_of_executed_units')]
         runs = stats[-1].split(':')[-1].strip() if stats else '?'

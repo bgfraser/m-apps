@@ -80,11 +80,21 @@ const char *jpeg_parse(const uint8_t *data, unsigned size, struct jpeg_image *im
     bool frame = false;
     unsigned samp = 0;
     for (;;) {
+        /* A marker: FF (more than one is fill), then its code. */
+        if (p < end && *p != 0xff)
+            return "NO MARKER";
         while (p < end && *p == 0xff)
             ++p;
-        if (end-p < 3)
+        if (p == end)
             return "CUT SHORT";
         unsigned marker = *p++;
+        /* The ones with no length: the end (before any scan), and those that belong only in the coded data. */
+        if (marker == 0xd9)
+            return "NO SCAN";
+        if (marker == 0x01 || (marker >= 0xd0 && marker <= 0xd8))
+            return "BAD MARKER";
+        if (end-p < 2)
+            return "CUT SHORT";
         unsigned length = be16(p);
         if (length < 2 || length > (unsigned)(end-p))
             return "BAD SEGMENT";
@@ -160,11 +170,14 @@ const char *jpeg_parse(const uint8_t *data, unsigned size, struct jpeg_image *im
                 if (t.component_dc[c] > 1 || t.component_ac[c] > 1)
                     return "HUFFMAN TABLE ID";
             }
+            /* Baseline's spectral selection, all 64 coefficients, and no successive approximation. */
+            if (s[7] != 0 || s[8] != 63 || s[9] != 0)
+                return "NOT BASELINE";
+            if (s_end == end)
+                return "NO DATA";
             image->entropy = s_end;
             image->entropy_size = (unsigned)(end-s_end);
             break;
-        } else if (marker == 0xd9) {
-            return "NO SCAN";
         }
     }
     if (t.component_q[1] != t.component_q[2] || t.component_dc[1] != t.component_dc[2] ||

@@ -40,8 +40,8 @@ A setting with a name not in this table is one a reader doesn't know. Settings t
 - Skip blank lines, comments and settings you don't know.
 - Skip a network whose name or password can't be (an empty name, more than 32 bytes, a zero byte, a password of 1 to 7 characters, or over 63). A `password=` before the first `ssid=` belongs to no network.
 - A name given twice: the first one that can be joined counts, and the others take no place among the 12.
-- `use=` given twice: the last one counts.
-- Take at least 12 networks and a 4 KiB file. m-apps' WiFi app takes 12 and up to 4096 bytes, and won't change a larger file.
+- `password=` given twice for a network: the last one counts. So does `use=` given twice.
+- Take at least 12 networks and a 4 KiB file. m-apps' WiFi app takes 12 and up to 4096 bytes, and won't change a larger file. With more than 12 in the file, a network it adds goes at the end, so the next read may not take it.
 
 ## Writing
 

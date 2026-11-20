@@ -1,7 +1,8 @@
 /* SPDX-License-Identifier: MIT */
 /* libFuzzer: what the radio hears, on any bytes, as apps/wifi/net.c hands it on: a beacon or probe response
  * (frames.c), a data frame through the length check to the IP layer (wifi_ip.c: ARP, DHCP, UDP), and a WPA2 key
- * message to the station (wifi_sta.c). Nothing may read outside the frame. The first byte picks the station's state. */
+ * message or a management response to the station (wifi_sta.c). Nothing may read outside the frame. The first byte picks
+ * the IP layer's and the station's states. */
 #include "frames.h"
 #include "net.h"
 #include "wifi_ip.h"
@@ -64,7 +65,12 @@ int LLVMFuzzerTestOneInput(const uint8_t *data, size_t n) {
     wifi_sta_init(&sta, mac, zeros);
     wifi_sta_set_pmk(&sta, pmk, (const uint8_t *)"fuzz", 4);
     wifi_sta_set_ap(&sta, ap);
-    sta.state = state&16 ? WIFI_STA_STATE_WAIT_M3 : WIFI_STA_STATE_WAIT_M1;
+    /* Every state a received frame can find it in: waiting for the authentication or association response, for the
+     * first or third key message, or joined (a group key change). (A third message with a MIC that holds needs the
+     * handshake's own keys, which random bytes don't reach.) */
+    static const enum wifi_sta_state states[] = {WIFI_STA_STATE_AUTH, WIFI_STA_STATE_ASSOC, WIFI_STA_STATE_WAIT_M1,
+                                                 WIFI_STA_STATE_WAIT_M3, WIFI_STA_STATE_CONNECTED};
+    sta.state = states[(state >> 4)%5];
     wifi_sta_rx_frame(&sta, f, len, tx, &tx_len);
     free(f);
     return 0;

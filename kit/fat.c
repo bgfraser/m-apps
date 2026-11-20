@@ -720,6 +720,11 @@ const char *fat_swap(uint32_t directory, const char name[11], uint32_t start, ui
     core_put_le32(e+28, size);
     if (!card_write(w.sector, block))
         return WRITE_ERROR;
+    /* On a damaged card whose FAT had the old chain's first cluster free, fat_reserve() can have taken it for the new
+     * one: freeing the old chain would free the new. (The old chain running into the new further on is possible on such
+     * a card too; it isn't checked.) */
+    if (w.found == start)
+        return 0;
     return fat_release(w.found);
 }
 
