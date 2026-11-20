@@ -210,6 +210,35 @@ A write has reached the card before the computer is told it succeeded, and data 
 - Spotlight can hold the disk for a while, so Eject may be refused at first. It took 38 s in testing. The app ends once the eject goes through.
 - macOS adds its own hidden `.Spotlight-V100` and `.fseventsd` folders to the card.
 
+### wifi
+
+Keeps the WiFi networks the card's apps join, in `/MBOOT/WIFI.TXT`, and tests them. It needs a card mod, and `picker` to start it: `make card` puts it in `/MBOOT/APPS/WIFI`. One file runs on both boards.
+
+`WIFI.TXT` is meant to be edited on a computer too:
+
+```
+# WiFi networks for the apps on this card. use= is the one they join.
+use=Home
+
+ssid=Home
+password=correct horse
+
+ssid=Cafe
+password=
+```
+
+One setting a line: the value is everything after the first `=`, spaces and all. `ssid=` starts a network, `password=` is its password (none for an open one), and `use=` names the one to join, otherwise the first. Lines starting with `#`, blank lines and settings it doesn't know are skipped, and CRLF and a byte order mark are fine. Up to 12 networks; names of 1 to 32 bytes, passwords of 8 to 63 characters. The app writes the file the safe way (`fat_reserve`, `fat_write`, `fat_swap`), so comments added by hand aren't kept when it saves. `apps/wifi/wifilist.c` reads and writes it, and builds on a computer for its test.
+
+- **The list** has `Add a network`, the networks, marking the one apps join, then `Back`. A network's page tests it, makes apps join it, changes its password, or deletes it (PLAY held 1.5 s). REC goes back.
+- **Adding** listens on channels 1 to 13, about 2 s, and lists what it heard, strongest first, with the signal and channel. Choosing one asks for its password, on the piano keys: OCT- held for capitals, OCT+ for digits and symbols, both for the rest of printable ASCII. `Type a name` adds one that wasn't heard, or a hidden one. Then it tests it: joined, it's saved and made the one to use; not, it says why, and PLAY saves it anyway.
+- **A test** starts the radio, finds the network, makes the WPA2 key, joins, and asks DHCP for an address. Then it shows the address, signal, channel and time.
+- **What it joins:** WPA2-PSK (CCMP, without required management frame protection), which includes most routers set to WPA2/WPA3, and open networks. WPA3-only is listed, as one it can't join.
+- **The stack** is from [w0ts/fm1-base](https://github.com/w0ts/fm1-base): the radio's start-up and WiFi path from its felucca-bsp headers, and Optimist's WPA2 station, crypto and IP layer, in `apps/wifi/bsp/` and `apps/wifi/wifi_*.c`, unchanged but for one hook (`apps/wifi/bsp/README.md`). `net.c` joins and gets an address, after fm1-base's `device/wifi_own.c`. The radio's buffers are in the RAM below the app (`.dma`), which its DMA reaches.
+- **The key** is 4096 rounds of HMAC-SHA-1. The chip's SHA unit does each block (`sha1hw.c`, driven as JieLi's SDK does) once it's given what the software does on four blocks, and is 8.5 times faster: the key takes about 0.9 s.
+- **The clock:** started from the card at 360 MHz, it drops to 320 MHz, as the datasheet rates the chip, and goes back before returning. At 360 MHz with the radio on, the store experiment's crypto went wrong at times.
+
+Tested on both boards from `run-ram`, not yet from the card (where the 320 MHz switch applies): an open network gave an address in about 3 s, and a WPA2 one in 4 to 8 s with the signal at -50 to -62 dBm. `make build/any/wifi.app WIFI_TEST=-DWIFI_AUTOTEST` (after `touch apps/wifi/wifi.c`) builds a version that needs no keys: it scans, then tests every network in `WIFI.TXT`, all in its log.
+
 ## License
 
 MIT, as m-bootloader is. See [LICENSE](LICENSE). Some parts have their own licences, and each file's header says which:
@@ -218,4 +247,5 @@ MIT, as m-bootloader is. See [LICENSE](LICENSE). Some parts have their own licen
 - `apps/mp3/minimp3.h` is [minimp3](https://github.com/lieff/minimp3), CC0-1.0.
 - `kit/keys.c` and `kit/keys.h` are MPL-2.0, from felucca-bsp's key tables (`boards/fm1/fm1_input.h` and `boards/smk37/fm1_input.h`).
 - `kit/textentry.c` and `kit/textentry.h` are MPL-2.0, adapted from Charles Vestal's [fm1-radio](https://github.com/charlesvestal/fm1-radio) password page.
+- `apps/wifi`'s radio and WiFi stack are from fm1-base and felucca-bsp: MPL-2.0, "GPL-3.0-only OR MPL-2.0" (taken here as MPL-2.0), and Apache-2.0 for three files from JieLi's SDK. `apps/wifi/net.c` is MPL-2.0, as it follows fm1-base's `wifi_own.c`. `apps/wifi/bsp/README.md` lists them.
 - `kit/font.h` is Barlow Semi Condensed, under the SIL Open Font License 1.1 (`kit/Barlow-OFL.txt`), as 4-bit alpha made by fm1-base's `tools/gen_font.py`.

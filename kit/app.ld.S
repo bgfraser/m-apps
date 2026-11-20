@@ -10,14 +10,14 @@ MEMORY {
 SECTIONS {
     .text ORIGIN(slot) : {
         KEEP(*(.entry))
-        *(.text .text.*) *(.rodata .rodata.*)
+        *(.text .text.*) *(.ram_text .ram_text.*) *(.rodata .rodata.*)
         *(.data .data.*)
         . = ALIGN(4);
     } > slot
     __payload_end = .;
     .bss (NOLOAD) : {
         __bss_start = .;
-        *(.bss .bss.*) *(COMMON)
+        *(.bss .bss.*) *(COMMON) *(.noinit .noinit.*)
         . = ALIGN(8); __bss_end = .;
     } > slot
     .stacks (NOLOAD) : {

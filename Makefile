@@ -12,14 +12,18 @@ CFLAGS := -target pi32v2 -mcpu=r3 -std=c99 -Oz -ffreestanding -fno-builtin -fno-
 	-Wall -Wextra -Werror -flto -DRAM_STAGE -Ikit -I$(MB)/include
 # The drivers apps get from m-bootloader. --gc-sections drops what an app doesn't use.
 DRIVERS := core platform display board runtime usb_midi
-APPS := hello crashtest hangtest usbdisk slots tone mp3
+APPS := hello crashtest hangtest usbdisk slots tone mp3 wifi
 # Built once more as universal apps, in build/any.
-UNIVERSAL_APPS := hello usbdisk slots mp3
+UNIVERSAL_APPS := hello usbdisk slots mp3 wifi
 # A stack for each app's C code. An app can override it: <name>_STACK := 0x8000
 APP_STACK_DEFAULT := 0x4000
 # The decoder keeps about 16 KiB on the stack, and speed matters more than size for it.
 mp3_STACK := 0x8000
 mp3_CFLAGS := -O2 -Iapps/mp3
+# WiFi: the radio's headers and Optimist's stack, from fm1-base (apps/wifi/bsp/README.md), in their own C. The key's
+# 4096 SHA-1 rounds and the crypto want speed.
+wifi_CFLAGS := -O2 -std=gnu99 -Iapps/wifi -Iapps/wifi/bsp -Wno-unused-function -Wno-unused-variable -Wno-unused-parameter \
+	-Wno-sign-compare -Wno-undefined-internal -include string.h -DWC_SHA1_HW=sha1_hw_block $(WIFI_TEST)
 # Kit files can have their own flags too: the shared look's drawing runs while sound has to keep time.
 kit_pixel_CFLAGS := -O2
 kit_canvas_CFLAGS := -O2
@@ -47,6 +51,8 @@ test:
 	python3 tests/mp3_ui_test.py
 	python3 tests/usbdisk_look_test.py
 	python3 tests/slots_screens_test.py
+	python3 tests/wifi_list_test.py
+	python3 tests/wifi_screens_test.py
 
 # make run APP=hello BOARD=fm1: start an app with run-ram, wait for it to end, and print its log.
 # make log BOARD=fm1: print the log an app left, however it was started.
@@ -109,7 +115,7 @@ build/%/LAUNCH.BIN: build/%/picker.elf tools/launch.py
 	python3 tools/launch.py $* build/$*/picker.raw $@
 
 # make card BOARD=smk37: build/smk37/card/MBOOT, the launcher and these apps in their folders, to copy to a card.
-CARD_APPS := hello usbdisk slots tone mp3
+CARD_APPS := hello usbdisk slots tone mp3 wifi
 card: build/$(BOARD)/MENU.BIN build/$(BOARD)/LAUNCH.BIN $(foreach a,$(CARD_APPS),build/$(BOARD)/$(a).app)
 	rm -rf build/$(BOARD)/card
 	mkdir -p build/$(BOARD)/card/MBOOT/APPS

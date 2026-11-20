@@ -1,0 +1,3 @@
+name=WiFi
+about=Networks for the apps that go online
+version=1.0

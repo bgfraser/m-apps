@@ -8,16 +8,27 @@
 
 /* With OCT+ held: digits on F3..D4, then these on D#4..F#5. A file name can't have \ / : * ? " < > |. */
 static const char symbols[] = " -_.,!&()+=#@$%'";
+/* With both held, for a password: the printable ASCII left. */
+static const char more[] = "\"*/:;<>?[\\]^`{|}~";
+static int all_symbols;
+
+void text_all_symbols(int on) {
+    all_symbols = on;
+}
 
 char text_char(unsigned key, unsigned layer) {
     if (key >= 26)
         return 0;
+    if (layer == TEXT_MORE)
+        return key < sizeof more-1 ? more[key] : TEXT_NOTHING;
     if (layer == TEXT_SYMBOLS)
         return key < 10 ? (char)('0'+key) : symbols[key-10];
     return (char)((layer == TEXT_UPPER ? 'A' : 'a')+key);
 }
 
 unsigned text_layer(uint32_t buttons) {
+    if (all_symbols && (buttons&(KEYS_OCT_UP | KEYS_OCT_DOWN)) == (KEYS_OCT_UP | KEYS_OCT_DOWN))
+        return TEXT_MORE;
     return buttons&KEYS_OCT_UP ? TEXT_SYMBOLS : buttons&KEYS_OCT_DOWN ? TEXT_UPPER : TEXT_LOWER;
 }
 
@@ -30,6 +41,8 @@ int text_type(char *text, unsigned most, uint32_t pressed, unsigned layer) {
         if (!(pressed >> k&1u))
             continue;
         char c = text_char(k, layer);
+        if (c == TEXT_NOTHING)
+            continue;
         if (!c) {
             if (n)
                 text[--n] = 0, changed = 1;
@@ -55,7 +68,8 @@ void text_piano(int y, unsigned layer, uint32_t held) {
             char t[2] = {text_char(k, layer), 0};
             if (!t[0])
                 t[0] = '<';
-
+            else if (t[0] == TEXT_NOTHING)
+                t[0] = 0;
             canvas_shape(x, y, kw-1, wh, 2, lit ? CANVAS_BLUE : CANVAS_WHITE, 16, 1);
             canvas_shape(x, y, kw-1, wh, 2, CANVAS_LINE, 6, 1);
             canvas_shape(x+1, y, kw-3, wh-1, 2, lit ? CANVAS_BLUE : CANVAS_WHITE, 16, 1);
@@ -72,6 +86,8 @@ void text_piano(int y, unsigned layer, uint32_t held) {
         int x = x0+wi*kw-6;
         bool lit = held >> k&1u;
         char t[2] = {text_char(k, layer), 0};
+        if (t[0] == TEXT_NOTHING)
+            t[0] = 0;
         canvas_shape(x, y, 12, bh, 2, lit ? CANVAS_BLUE : CANVAS_INK, 16, 1);
         canvas_text(x+(12-canvas_text_w(CANVAS_SMALL, t, 8))/2, y+5, CANVAS_SMALL, t, CANVAS_WHITE, 8);
     }
