@@ -88,12 +88,12 @@ int main(void) {
     CHECK(len == strlen(want) && !memcmp(text, want, len));
     if (len != strlen(want) || memcmp(text, want, len))
         printf("got:\n%.*s\n", (int)len, text);
-    /* Removed and put back: still where it was, with its new password. With no use= in the file, one goes before the
-     * first network. A last line with no line end gets one. */
+    /* Removed and put back: still where it was, with its new password, in the list too. With no use= in the file, one
+     * goes before the first network. A last line with no line end gets one. */
     const char *plain = "# x\nssid=A\npassword=aaaaaaaa\nssid=B\npassword=bbbbbbbb";
     read_text(&l, plain);
     wifi_list_remove(&l, 0);
-    CHECK(wifi_list_put(&l, "A", "AAAAAAAA") == 1);
+    CHECK(wifi_list_put(&l, "A", "AAAAAAAA") == 0 && !strcmp(l.net[1].ssid, "B"));
     CHECK(wifi_list_put(&l, "C", "cccccccc") == 2);
     CHECK(wifi_list_write(&l, plain, (unsigned)strlen(plain), text, sizeof text, &len));
     want = "# x\nuse=C\n\nssid=A\npassword=AAAAAAAA\nssid=B\npassword=bbbbbbbb\n\nssid=C\npassword=cccccccc\n";
@@ -154,6 +154,49 @@ int main(void) {
     CHECK(len == strlen(want) && !memcmp(text, want, len));
     if (len != strlen(want) || memcmp(text, want, len))
         printf("got:\n%.*s\n", (int)len, text);
+    /* A network added with the name of one the reader skipped (its password can't be): that one stays as it was, with its
+     * settings, and the new one goes at the end, so the list reads back in the same order. */
+    const char *skipped = "ssid=Home\npassword=short\nband=5\n\nssid=Cafe\npassword=cafe-pw-1\n";
+    read_text(&l, skipped);
+    CHECK(l.count == 1 && l.skipped == 1);
+    CHECK(wifi_list_put(&l, "Home", "home-pw-12") == 1);
+    CHECK(wifi_list_write(&l, skipped, (unsigned)strlen(skipped), text, sizeof text, &len));
+    want = "use=Home\n\nssid=Home\npassword=short\nband=5\n\nssid=Cafe\npassword=cafe-pw-1\n\nssid=Home\npassword=home-pw-12\n";
+    CHECK(len == strlen(want) && !memcmp(text, want, len));
+    wifi_list_read(&again, text, len);
+    CHECK(again.count == 2 && !strcmp(again.net[0].ssid, "Cafe") && !strcmp(again.net[1].pass, "home-pw-12"));
+    /* One the reader didn't take as the list was full, but could have: changed where it is, as the next read takes it. */
+    n = 0;
+    for (unsigned i = 0; i < WIFI_MOST; ++i)
+        n += (unsigned)sprintf(big+n, "ssid=net%u\npassword=password%u\n", i, i);
+    n += (unsigned)sprintf(big+n, "ssid=late\npassword=late-old-pw\n");
+    wifi_list_read(&l, big, n);
+    CHECK(l.count == WIFI_MOST && l.skipped == 1);
+    wifi_list_remove(&l, 0);
+    CHECK(wifi_list_put(&l, "late", "late-new-pw") >= 0);
+    CHECK(wifi_list_write(&l, big, n, text, sizeof text, &len));
+    wifi_list_read(&again, text, len);
+    int late = wifi_list_find(&again, "late");
+    CHECK(late >= 0 && !strcmp(again.net[late].pass, "late-new-pw") && !memmem(text, len, "late-old-pw", 11));
+    /* A last line with no LF that ends in a lone CR (dropped by the reader): what's added after it doesn't change it,
+     * even when the line holds a CR of its own (ssid=w CR CR: the name "w CR", which can't be one). */
+    const char *cr = "ssid=Home\npassword=home-pw-1\nuse=Home\r";
+    read_text(&l, cr);
+    CHECK(wifi_list_put(&l, "New", "new-pw-123") == 1);
+    l.use = 0;
+    CHECK(wifi_list_write(&l, cr, (unsigned)strlen(cr), text, sizeof text, &len));
+    wifi_list_read(&again, text, len);
+    CHECK(again.count == 2 && again.use == 0);
+    const char *crcr = "ssid=w\r\r";
+    read_text(&l, crcr);
+    CHECK(l.count == 0 && l.skipped == 1);
+    CHECK(wifi_list_put(&l, "New", "") == 0);
+    CHECK(wifi_list_write(&l, crcr, (unsigned)strlen(crcr), text, sizeof text, &len));
+    wifi_list_read(&again, text, len);
+    CHECK(again.count == 1 && !strcmp(again.net[0].ssid, "New"));
+    /* A password given twice: the last counts, though the first can't be one. */
+    read_text(&l, "ssid=A\npassword=bad\npassword=good-pass\n");
+    CHECK(l.count == 1 && !strcmp(l.net[0].pass, "good-pass"));
     /* A file too big for out isn't cut short. */
     CHECK(!wifi_list_write(&l, plain, (unsigned)strlen(plain), text, 20, &len));
     /* Names and passwords that can't be. */

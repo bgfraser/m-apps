@@ -14,8 +14,10 @@
  * and bit 14 clears it, bit 13 says the coded data ran out and bit 12 clears it. Bits 2-3 would turn on its
  * interrupts, which we leave off. */
 #include "jpeg_hw.h"
-#include "platform.h"
 #include <string.h>
+/* JPEG_PARSE_ONLY: the headers' parser alone, which builds on a computer too (tests/fuzz/jpeg_fuzz.c). */
+#ifndef JPEG_PARSE_ONLY
+#include "platform.h"
 
 #define JPG ((volatile uint32_t *)0x41900u)
 enum { CON0, CON1, CON2, YUVLINE, YDCVAL, UDCVAL, VDCVAL, YPTR, UPTR, VPTR, BADDR, BCNT, MCUCNT, PRECNT, HQTBLADR,
@@ -40,6 +42,7 @@ static inline void sync(void) {
 uint32_t jpeg_register(unsigned index) {
     return index < REGISTERS ? JPG[index] : 0;
 }
+#endif
 
 /* What the headers held. Baseline allows tables 0 and 1 of each kind; 2 and 3 are refused. */
 static struct {
@@ -77,11 +80,21 @@ const char *jpeg_parse(const uint8_t *data, unsigned size, struct jpeg_image *im
     bool frame = false;
     unsigned samp = 0;
     for (;;) {
+        /* A marker: FF (more than one is fill), then its code. */
+        if (p < end && *p != 0xff)
+            return "NO MARKER";
         while (p < end && *p == 0xff)
             ++p;
-        if (end-p < 3)
+        if (p == end)
             return "CUT SHORT";
         unsigned marker = *p++;
+        /* The ones with no length: the end (before any scan), and those that belong only in the coded data. */
+        if (marker == 0xd9)
+            return "NO SCAN";
+        if (marker == 0x01 || (marker >= 0xd0 && marker <= 0xd8))
+            return "BAD MARKER";
+        if (end-p < 2)
+            return "CUT SHORT";
         unsigned length = be16(p);
         if (length < 2 || length > (unsigned)(end-p))
             return "BAD SEGMENT";
@@ -138,10 +151,15 @@ const char *jpeg_parse(const uint8_t *data, unsigned size, struct jpeg_image *im
                 s += 17+total;
             }
         } else if (marker == 0xdd) {
+            if (length < 4)
+                return "BAD SEGMENT";
             image->restart = be16(s);
         } else if (marker == 0xda) {
             if (!frame)
                 return "NO FRAME";
+            /* The component count, three components of two bytes, and three bytes of spectral selection. */
+            if (length < 2+1+6+3)
+                return "BAD SEGMENT";
             if (s[0] != 3)
                 return "NOT ONE SCAN";
             for (unsigned c = 0; c < 3; ++c) {
@@ -152,11 +170,14 @@ const char *jpeg_parse(const uint8_t *data, unsigned size, struct jpeg_image *im
                 if (t.component_dc[c] > 1 || t.component_ac[c] > 1)
                     return "HUFFMAN TABLE ID";
             }
+            /* Baseline's spectral selection, all 64 coefficients, and no successive approximation. */
+            if (s[7] != 0 || s[8] != 63 || s[9] != 0)
+                return "NOT BASELINE";
+            if (s_end == end)
+                return "NO DATA";
             image->entropy = s_end;
             image->entropy_size = (unsigned)(end-s_end);
             break;
-        } else if (marker == 0xd9) {
-            return "NO SCAN";
         }
     }
     if (t.component_q[1] != t.component_q[2] || t.component_dc[1] != t.component_dc[2] ||
@@ -201,6 +222,7 @@ unsigned jpeg_work_size(const struct jpeg_image *image) {
 
 /* One table in the decoder's layout: the smallest code of each length, the index of its first symbol, then the
  * symbols. The code is shifted on only while it fits, which is how JieLi's driver builds it. */
+#ifndef JPEG_PARSE_ONLY
 static void huffman(uint8_t *out, const uint8_t *counts, const uint8_t *symbols, bool ac) {
     unsigned n = ac ? 16 : 12, code = 0, index = 0;
     memset(out, 0, ac ? 210 : 48);
@@ -328,3 +350,4 @@ const char *jpeg_decode(const struct jpeg_image *image, uint8_t *work, jpeg_row 
     JPG[BCNT] = 0;
     return error;
 }
+#endif

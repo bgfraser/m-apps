@@ -33,6 +33,15 @@ jobs:
         run: make -j2
       - name: Tests
         run: make test
+      - name: The system's clang with libFuzzer (the clang first on PATH is the pi32v2 toolchain's)
+        shell: bash
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y -q clang
+          v=$(/usr/bin/clang --version | sed -nE 's/.*clang version ([0-9]+).*/\1/p' | head -1)
+          sudo apt-get install -y -q "libclang-rt-$v-dev"
+      - name: Fuzz the parsers, 15 s each
+        run: make fuzz FUZZ_SECONDS=15 FUZZ_CC=/usr/bin/clang FUZZ_REQUIRE=1
       - name: The release's tars
         run: make release
       - uses: actions/upload-artifact@v4

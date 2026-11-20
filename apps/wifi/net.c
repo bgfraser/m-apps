@@ -2,6 +2,7 @@
 /* The join follows w0ts/fm1-base's device/wifi_own.c (GPL-3.0-only OR MPL-2.0, taken here under MPL-2.0): Copyright
  * (C) 2026 Henri David (hdavid), Optimist (github.com/w0ts/optimist). */
 #include "net.h"
+#include "frames.h"
 #include "app.h"
 #include "sha1hw.h"
 #include "fm1_ble.h"
@@ -118,72 +119,12 @@ static void start(void) {
 
 /* ---- the networks heard ---- */
 
-/* A beacon or probe response: its BSSID at 16, fixed fields to 36 (capabilities at 34), then the elements. */
-struct heard {
-    const uint8_t *ssid, *bssid;
-    unsigned ssid_len, channel, security;
-};
-
-static bool parse_beacon(const uint8_t *m, uint32_t len, struct heard *h) {
-    if (len < 36 || (m[0] != 0x80 && m[0] != 0x50))
-        return false;
-    memset(h, 0, sizeof *h);
-    h->bssid = m+16;
-    h->channel = fm1_wifi_channel();
-    bool privacy = (m[34]&0x10) != 0, rsn = false, wpa2 = false;
-    for (uint32_t at = 36; at+2 <= len; ) {
-        unsigned id = m[at], l = m[at+1];
-        const uint8_t *b = m+at+2;
-        if (at+2+l > len)
-            break;
-        if (id == 0 && l <= 32) {
-            h->ssid = b;
-            h->ssid_len = l;
-        } else if (id == 3 && l == 1) {
-            h->channel = b[0];
-        } else if (id == 48 && l >= 2) {
-            /* RSN: version 1, group CCMP, a CCMP pairwise and a PSK key management among those offered, PMF not
-             * required (capabilities bit 6). */
-            static const uint8_t ccmp[4] = {0x00, 0x0f, 0xac, 0x04}, psk[4] = {0x00, 0x0f, 0xac, 0x02};
-            rsn = true;
-            if (l >= 8 && b[0] == 1 && b[1] == 0 && !memcmp(b+2, ccmp, 4)) {
-                unsigned p = 6, pairs = b[p] | b[p+1] << 8, keys;
-                bool pair_ok = false, key_ok = false;
-                p += 2;
-                for (unsigned i = 0; i < pairs && p+4 <= l; ++i, p += 4)
-                    pair_ok |= !memcmp(b+p, ccmp, 4);
-                if (p+2 <= l) {
-                    keys = b[p] | b[p+1] << 8;
-                    p += 2;
-                    for (unsigned i = 0; i < keys && p+4 <= l; ++i, p += 4)
-                        key_ok |= !memcmp(b+p, psk, 4);
-                }
-                bool pmf_required = p+2 <= l && (b[p]&0x40);
-                wpa2 = pair_ok && key_ok && !pmf_required;
-            }
-        }
-        at += 2+l;
-    }
-    h->security = wpa2 ? NET_WPA2 : !privacy && !rsn ? NET_OPEN : NET_OTHER;
-    /* A channel said that can't be one: the one it was heard on. */
-    if (h->channel < 1 || h->channel > 13)
-        h->channel = fm1_wifi_channel();
-    return true;
-}
-
-static bool hidden(const uint8_t *ssid, unsigned n) {
-    for (unsigned i = 0; i < n; ++i)
-        if (ssid[i])
-            return false;
-    return true;
-}
-
 static struct net_ap *scan_list;
 static unsigned scan_most, scan_count;
 
 static void on_scan(const uint8_t *m, uint32_t len, int8_t rssi) {
-    struct heard h;
-    if (!parse_beacon(m, len, &h) || !h.ssid || hidden(h.ssid, h.ssid_len))
+    struct frame_heard h;
+    if (!frame_beacon(m, len, fm1_wifi_channel(), &h) || !h.ssid || frame_hidden(h.ssid, h.ssid_len))
         return;
     struct net_ap *ap = 0;
     for (unsigned i = 0; i < scan_count && !ap; ++i)
@@ -243,8 +184,8 @@ static struct net_ap found;
 static unsigned answers;            /* probe responses naming it: whether asking by name is heard */
 
 static void on_find(const uint8_t *m, uint32_t len, int8_t rssi) {
-    struct heard h;
-    if (!parse_beacon(m, len, &h) || h.ssid_len != want_len || memcmp(h.ssid, want, want_len))
+    struct frame_heard h;
+    if (!frame_beacon(m, len, fm1_wifi_channel(), &h) || h.ssid_len != want_len || memcmp(h.ssid, want, want_len))
         return;
     answers += m[0] == 0x50;
     if (rssi > found.rssi) {
@@ -262,26 +203,6 @@ static void on_join(const uint8_t *f, uint32_t len, int8_t rssi) {
         send(tx_len);
 }
 
-/* Whether an IPv4 packet's lengths fit the n bytes received, and a UDP one's too: the IP layer (wifi_ip.c) trusts them.
- * Anything else is let through as it is. */
-static bool lengths_fit(const uint8_t *type_and_packet, uint32_t n) {
-    const uint8_t *p = type_and_packet+2;
-    if (type_and_packet[0] != 0x08 || type_and_packet[1] != 0x00)
-        return true;
-    n -= 2;
-    if (n < 20u || p[0] >> 4 != 4u)
-        return false;
-    uint32_t header = (p[0]&15u)*4u, total = (uint32_t)p[2] << 8 | p[3];
-    if (header < 20u || total < header || total > n)
-        return false;
-    if (p[9] != 17u)
-        return true;
-    if (total-header < 8u)
-        return false;
-    uint32_t udp = (uint32_t)p[header+4] << 8 | p[header+5];
-    return udp >= 8u && udp <= total-header;
-}
-
 static void on_data(const uint8_t *f, uint32_t len, int8_t rssi) {
     (void)rssi;
     uint32_t tx_len = 0;
@@ -289,7 +210,7 @@ static void on_data(const uint8_t *f, uint32_t len, int8_t rssi) {
         return;
     ++count.data;
     uint32_t header = (f[0]&0x80u) ? 26u : 24u;
-    if (len < header+8u || !wifi_ip_early_filter(&ip, f, len) || !lengths_fit(f+header+6u, len-header-6u))
+    if (len < header+8u || !wifi_ip_early_filter(&ip, f, len) || !frame_lengths_fit(f+header+6u, len-header-6u))
         return;
     ++count.ours;
     /* EAPOL: a new group key. */
