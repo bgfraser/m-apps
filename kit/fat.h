@@ -43,6 +43,7 @@ bool fat_read(const struct fat_entry *file, uint32_t offset, void *to, uint32_t 
  * Call fat_commit() at the end, which updates the volume's count of free clusters. */
 #define FAT_ATTR_ARCHIVE 0x20u
 #define FAT_ATTR_FOLDER 0x10u
+#define FAT_ATTR_LABEL 0x08u
 /* A chain of enough clusters for size bytes, none of them written yet. If there isn't room, nothing changes. */
 const char *fat_reserve(uint32_t size, uint32_t *start);
 /* Whole sectors only, within a chain from fat_reserve(). */
@@ -64,7 +65,8 @@ const char *fat_swap(uint32_t directory, const char name[11], uint32_t start, ui
 const char *fat_remove(uint32_t directory, const char name[11]);
 /* Finds or makes a folder. */
 const char *fat_make_folder(uint32_t *cluster, const char name[11]);
-/* Whether a directory holds this name, with what it holds if so. */
+/* Whether a directory holds a file of this name, with what it holds if so. A folder or the volume's label of that name
+ * isn't one, here or in fat_swap() and fat_remove(), but fat_add() would still clash with it. */
 const char *fat_find(uint32_t directory, const char name[11], struct fat_entry *entry, bool *found);
 const char *fat_commit(void);
 #endif

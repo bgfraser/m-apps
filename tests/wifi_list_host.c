@@ -45,14 +45,14 @@ int main(void) {
     CHECK(wifi_list_put(&l, "one more", "abcdefgh") == -1);
     l.use = 5;
     char text[WIFI_TEXT_MOST];
-    unsigned len = wifi_list_write(&l, 0, 0, text, sizeof text);
-    CHECK(len > 0);
+    unsigned len = 0;
+    CHECK(wifi_list_write(&l, 0, 0, text, sizeof text, &len) && len > 0);
     struct wifi_list again;
     wifi_list_read(&again, text, len);
     CHECK(again.count == l.count && again.use == 5 && !again.skipped);
     for (unsigned i = 0; i < l.count; ++i)
         CHECK(!strcmp(again.net[i].ssid, l.net[i].ssid) && !strcmp(again.net[i].pass, l.net[i].pass));
-    CHECK(!wifi_list_write(&l, 0, 0, text, 100));
+    CHECK(!wifi_list_write(&l, 0, 0, text, 100, &len));
     /* Put changes a password in place and uses it; remove keeps use on the same network, or the first. */
     memset(&l, 0, sizeof l);
     wifi_list_put(&l, "A", "aaaaaaaa");
@@ -67,8 +67,7 @@ int main(void) {
     CHECK(l.count == 1 && l.use == 0);
     wifi_list_remove(&l, 0);
     CHECK(l.count == 0 && l.use == 0);
-    len = wifi_list_write(&l, 0, 0, text, sizeof text);
-    CHECK(len && !memmem(text, len, "\nuse=", 5));
+    CHECK(wifi_list_write(&l, 0, 0, text, sizeof text, &len) && len && !memmem(text, len, "\nuse=", 5));
     /* Changing a file keeps what it doesn't know: a byte order mark, CRLF, comments, blank lines, a setting it doesn't
      * know, a network it skipped (a short password), and where use= is. A password changes in place, a removed
      * network's settings go and its comment stays, a password the file didn't have goes at the end of its settings,
@@ -82,7 +81,7 @@ int main(void) {
     wifi_list_remove(&l, (unsigned)wifi_list_find(&l, "Shed"));
     CHECK(wifi_list_put(&l, "Cafe", "cafe-pw-22") == 1);
     CHECK(wifi_list_put(&l, "New", "") == 2);
-    len = wifi_list_write(&l, mine, (unsigned)strlen(mine), text, sizeof text);
+    CHECK(wifi_list_write(&l, mine, (unsigned)strlen(mine), text, sizeof text, &len));
     const char *want = "\xef\xbb\xbf# my networks\r\n\r\n# at home\r\nssid=Home\r\npassword=new-home-pw\r\nband=5\r\n\r\n"
                        "# the shed\r\n\r\nssid=Short\r\npassword=1234\r\n\r\nssid=Cafe\r\npassword=cafe-pw-22\r\n\r\n"
                        "use=New\r\n\r\nssid=New\r\npassword=\r\n";
@@ -96,7 +95,7 @@ int main(void) {
     wifi_list_remove(&l, 0);
     CHECK(wifi_list_put(&l, "A", "AAAAAAAA") == 1);
     CHECK(wifi_list_put(&l, "C", "cccccccc") == 2);
-    len = wifi_list_write(&l, plain, (unsigned)strlen(plain), text, sizeof text);
+    CHECK(wifi_list_write(&l, plain, (unsigned)strlen(plain), text, sizeof text, &len));
     want = "# x\nuse=C\n\nssid=A\npassword=AAAAAAAA\nssid=B\npassword=bbbbbbbb\n\nssid=C\npassword=cccccccc\n";
     CHECK(len == strlen(want) && !memcmp(text, want, len));
     if (len != strlen(want) || memcmp(text, want, len))
@@ -110,17 +109,53 @@ int main(void) {
     char first[WIFI_TEXT_MOST];
     wifi_list_put(&l, "Three", "33333333");
     l.use = 0;
-    unsigned first_n = wifi_list_write(&l, two, (unsigned)strlen(two), first, sizeof first);
+    unsigned first_n = 0;
+    CHECK(wifi_list_write(&l, two, (unsigned)strlen(two), first, sizeof first, &first_n));
     read_text(&l, "");
     wifi_list_read(&l, first, first_n);
     CHECK(l.count == 3 && l.net[2].in_file);
     wifi_list_remove(&l, 2);
-    len = wifi_list_write(&l, first, first_n, text, sizeof text);
+    CHECK(wifi_list_write(&l, first, first_n, text, sizeof text, &len));
     CHECK(len == strlen(two) && !memcmp(text, two, len));
     if (len != strlen(two) || memcmp(text, two, len))
         printf("got:\n%.*s\n", (int)len, text);
+    /* The writer's harder cases. A comment between a network's name and its password: the password changes once, in
+     * place. Each rewritten line keeps its own line end. */
+    const char *mixed = "ssid=A\r\n# its password\npassword=aaaaaaaa\r\nuse=A\n";
+    read_text(&l, mixed);
+    CHECK(wifi_list_put(&l, "A", "AAAAAAAA") == 0);
+    CHECK(wifi_list_write(&l, mixed, (unsigned)strlen(mixed), text, sizeof text, &len));
+    want = "ssid=A\r\n# its password\npassword=AAAAAAAA\r\nuse=A\n";
+    CHECK(len == strlen(want) && !memcmp(text, want, len));
+    /* Removing the only network of a file with nothing else: nothing is left, and that's no failure. */
+    const char *only = "ssid=A\npassword=aaaaaaaa\n";
+    read_text(&l, only);
+    wifi_list_remove(&l, 0);
+    len = 99;
+    CHECK(wifi_list_write(&l, only, (unsigned)strlen(only), text, sizeof text, &len) && len == 0);
+    /* A name twice takes one place: twelve others after it all fit. Removing it removes every network of its name. */
+    n = (unsigned)sprintf(big, "ssid=dup\npassword=dupdupdup\nssid=dup\npassword=otherdup\n");
+    for (unsigned i = 0; i < WIFI_MOST-1; ++i)
+        n += (unsigned)sprintf(big+n, "ssid=net%u\npassword=password%u\n", i, i);
+    wifi_list_read(&l, big, n);
+    CHECK(l.count == WIFI_MOST && l.skipped == 1 && !strcmp(l.net[0].pass, "dupdupdup"));
+    wifi_list_remove(&l, 0);
+    CHECK(wifi_list_write(&l, big, n, text, sizeof text, &len) && !memmem(text, len, "dup", 3));
+    /* A name with a zero byte in it can't be one. */
+    read_text(&l, "");
+    wifi_list_read(&l, "ssid=a\0b\npassword=abcdefgh\n", 26);
+    CHECK(l.count == 0 && l.skipped == 1);
+    /* A password the file didn't have goes just after its name, even on a last line with no end. */
+    const char *bare = "ssid=Cafe";
+    read_text(&l, bare);
+    CHECK(wifi_list_put(&l, "Cafe", "cafe-pw-22") == 0);
+    CHECK(wifi_list_write(&l, bare, (unsigned)strlen(bare), text, sizeof text, &len));
+    want = "use=Cafe\n\nssid=Cafe\npassword=cafe-pw-22\n";
+    CHECK(len == strlen(want) && !memcmp(text, want, len));
+    if (len != strlen(want) || memcmp(text, want, len))
+        printf("got:\n%.*s\n", (int)len, text);
     /* A file too big for out isn't cut short. */
-    CHECK(!wifi_list_write(&l, plain, (unsigned)strlen(plain), text, 20));
+    CHECK(!wifi_list_write(&l, plain, (unsigned)strlen(plain), text, 20, &len));
     /* Names and passwords that can't be. */
     CHECK(!wifi_ssid_ok("") && !wifi_ssid_ok("a\nb") && wifi_ssid_ok("caf\xc3\xa9"));
     CHECK(wifi_pass_ok("") && !wifi_pass_ok("1234567") && !wifi_pass_ok("caf\xc3\xa9 1234") && wifi_pass_ok("~!@#$%^&*()"));

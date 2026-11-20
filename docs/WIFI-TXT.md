@@ -38,8 +38,8 @@ A setting with a name not in this table is one a reader doesn't know. Settings t
 ## Reading
 
 - Skip blank lines, comments and settings you don't know.
-- Skip a network whose name or password can't be (an empty name, more than 32 bytes, a password of 1 to 7 characters, or over 63). A `password=` before the first `ssid=` belongs to no network.
-- A name given twice: the first one counts.
+- Skip a network whose name or password can't be (an empty name, more than 32 bytes, a zero byte, a password of 1 to 7 characters, or over 63). A `password=` before the first `ssid=` belongs to no network.
+- A name given twice: the first one that can be joined counts, and the others take no place among the 12.
 - `use=` given twice: the last one counts.
 - Take at least 12 networks and a 4 KiB file. m-apps' WiFi app takes 12 and up to 4096 bytes, and won't change a larger file.
 
@@ -47,9 +47,10 @@ A setting with a name not in this table is one a reader doesn't know. Settings t
 
 Someone may have written the file by hand, and another program may have added settings to it. So a program changing it changes only what it means to, and keeps everything else as it was:
 
-- Keep comments, blank lines, settings you don't know, the byte order mark, the line ends, and networks you skipped when reading.
-- Change a password where it is. A network that had no `password=` line gets one at the end of its lines.
-- Remove a network with its settings: its `ssid=`, `password=` and any others up to the next `ssid=`, and a blank line just before it, so adding a network and removing it leaves the file as it was. Other blank lines and comments stay.
+- Keep comments, blank lines, settings you don't know, the byte order mark, each line's line end, and networks you skipped when reading.
+- Change a password where it is. A network that had no `password=` line gets one just after its `ssid=`.
+- Remove a network with its settings: its `ssid=`, `password=` and any others up to the next `ssid=`, and a blank line just before it, so adding a network and removing it leaves the file as it was. Other blank lines and comments stay. A name given twice goes everywhere it's given, or the next reader would find it again.
+- Removing the last network can leave an empty file, which is a file with no networks.
 - Set `use=` where it is. If there's none, add one before the first network.
 - Add a new network at the end.
 - Replace the file in one step, if you can: write the new text as a new file, then point the directory entry at it, so losing power leaves either the old file or the new one. m-apps' `kit/fat.c` does this (`fat_reserve`, `fat_write`, `fat_swap`).

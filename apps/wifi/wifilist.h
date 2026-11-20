@@ -16,8 +16,8 @@
  * to join; without it, or naming none of them, it's the first. Lines starting with # and blank lines are skipped, and
  * so are settings it doesn't know. Line ends may be LF or CRLF, and a UTF-8 byte order mark at the start is skipped.
  *
- * A name is 1 to 32 bytes and a password 8 to 63 characters (WPA2-PSK), or none for an open network. Pure data, so it
- * builds on a computer too (tests/wifi_list_test.py). */
+ * A name is 1 to 32 bytes and a password 8 to 63 characters (WPA2-PSK), or none for an open network. A name given
+ * twice: the first that can be joined counts. Pure data, so it builds on a computer too (tests/wifi_list_test.py). */
 #ifndef WIFILIST_H
 #define WIFILIST_H
 #include <stdbool.h>
@@ -46,12 +46,13 @@ struct wifi_list {
 
 /* Reads a file's text, n bytes, which needn't end in a zero. */
 void wifi_list_read(struct wifi_list *l, const char *text, unsigned n);
-/* The file's text for the list, in out with room for most: its length, or 0 if it doesn't fit. It's the old text, n bytes
- * (or none, 0 and 0), changed as little as can be: comments, blank lines, settings it doesn't know, and networks it
- * skipped stay as they were, with its line ends. A network's password= is rewritten in place, a removed one's settings
- * go with a blank line just before it (other blank lines and comments stay), use= is set where it is (or added before
- * the first network), and new networks go at the end. */
-unsigned wifi_list_write(const struct wifi_list *l, const char *old, unsigned old_n, char *out, unsigned most);
+/* The file's text for the list, in to with room for most bytes: false if it doesn't fit, and otherwise its length in *n,
+ * which may be 0. It's the old text, old_n bytes (or none, 0 and 0), changed as little as can be (docs/WIFI-TXT.md):
+ * comments, blank lines, settings it doesn't know and networks it skipped stay as they were, with their line ends. A
+ * network's password= is rewritten in place, or added just after its ssid=; a removed one's settings go, in every
+ * network of its name, with a blank line just before it (other blank lines and comments stay); use= is set where it is
+ * (or added before the first network); and new networks go at the end. */
+bool wifi_list_write(const struct wifi_list *l, const char *old, unsigned old_n, char *to, unsigned most, unsigned *n);
 /* Whether a name, or a password, can go in the file and be joined: no line ends, and the lengths above. */
 bool wifi_ssid_ok(const char *ssid);
 bool wifi_pass_ok(const char *pass);

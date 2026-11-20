@@ -123,7 +123,7 @@ struct heard {
 };
 
 static bool parse_beacon(const uint8_t *m, uint32_t len, struct heard *h) {
-    if ((m[0] != 0x80 && m[0] != 0x50) || len < 36)
+    if (len < 36 || (m[0] != 0x80 && m[0] != 0x50))
         return false;
     memset(h, 0, sizeof *h);
     h->bssid = m+16;
@@ -163,6 +163,9 @@ static bool parse_beacon(const uint8_t *m, uint32_t len, struct heard *h) {
         at += 2+l;
     }
     h->security = wpa2 ? NET_WPA2 : !privacy && !rsn ? NET_OPEN : NET_OTHER;
+    /* A channel said that can't be one: the one it was heard on. */
+    if (h->channel < 1 || h->channel > 13)
+        h->channel = fm1_wifi_channel();
     return true;
 }
 
@@ -235,10 +238,14 @@ unsigned net_scan(struct net_ap *list, unsigned most, void (*progress)(unsigned 
 static const char *want;
 static unsigned want_len;
 static struct net_ap found;
+static unsigned answers;            /* probe responses naming it: whether asking by name is heard */
 
 static void on_find(const uint8_t *m, uint32_t len, int8_t rssi) {
     struct heard h;
-    if (parse_beacon(m, len, &h) && h.ssid_len == want_len && !memcmp(h.ssid, want, want_len) && rssi > found.rssi) {
+    if (!parse_beacon(m, len, &h) || h.ssid_len != want_len || memcmp(h.ssid, want, want_len))
+        return;
+    answers += m[0] == 0x50;
+    if (rssi > found.rssi) {
         found.rssi = rssi;
         memcpy(found.bssid, h.bssid, 6);
         found.channel = (uint8_t)h.channel;
@@ -253,6 +260,26 @@ static void on_join(const uint8_t *f, uint32_t len, int8_t rssi) {
         send(tx_len);
 }
 
+/* Whether an IPv4 packet's lengths fit the n bytes received, and a UDP one's too: the IP layer (wifi_ip.c) trusts them.
+ * Anything else is let through as it is. */
+static bool lengths_fit(const uint8_t *type_and_packet, uint32_t n) {
+    const uint8_t *p = type_and_packet+2;
+    if (type_and_packet[0] != 0x08 || type_and_packet[1] != 0x00)
+        return true;
+    n -= 2;
+    if (n < 20u || p[0] >> 4 != 4u)
+        return false;
+    uint32_t header = (p[0]&15u)*4u, total = (uint32_t)p[2] << 8 | p[3];
+    if (header < 20u || total < header || total > n)
+        return false;
+    if (p[9] != 17u)
+        return true;
+    if (total-header < 8u)
+        return false;
+    uint32_t udp = (uint32_t)p[header+4] << 8 | p[header+5];
+    return udp >= 8u && udp <= total-header;
+}
+
 static void on_data(const uint8_t *f, uint32_t len, int8_t rssi) {
     (void)rssi;
     uint32_t tx_len = 0;
@@ -260,7 +287,7 @@ static void on_data(const uint8_t *f, uint32_t len, int8_t rssi) {
         return;
     ++count.data;
     uint32_t header = (f[0]&0x80u) ? 26u : 24u;
-    if (len < header+8u || !wifi_ip_early_filter(&ip, f, len))
+    if (len < header+8u || !wifi_ip_early_filter(&ip, f, len) || !lengths_fit(f+header+6u, len-header-6u))
         return;
     ++count.ours;
     /* EAPOL: a new group key. */
@@ -285,6 +312,34 @@ static uint32_t build_assoc(struct wifi_sta *s, uint8_t *b) {
         n -= 22;
     }
     return n;
+}
+
+/* A probe request naming the network: one that doesn't say its name in its beacons (a hidden one) answers it with a
+ * probe response that does. Broadcast, so nothing acknowledges it. */
+static void probe(const char *ssid, unsigned n) {
+    static const uint8_t rates[] = {1, 8, 0x82, 0x84, 0x8b, 0x96, 0x0c, 0x12, 0x18, 0x24, 50, 4, 0x30, 0x48, 0x60, 0x6c};
+    static uint16_t seq;
+    uint8_t *b = frame_out();
+    memset(b, 0, 24);
+    b[0] = 0x40;
+    memset(b+4, 0xff, 6);
+    memcpy(b+10, mac, 6);
+    memset(b+16, 0xff, 6);
+    b[22] = (uint8_t)(seq << 4);
+    b[23] = (uint8_t)(seq >> 4);
+    ++seq;
+    uint32_t at = 24;
+    b[at++] = 0;
+    b[at++] = (uint8_t)n;
+    memcpy(b+at, ssid, n);
+    at += n;
+    memcpy(b+at, rates, sizeof rates);
+    at += sizeof rates;
+    fm1_wifi_tx_prepare_rate(txb, at, 1u, 0u, FM1_WIFI_RATE_CCK1);
+    if (fm1_wifi_tx(txb) == 0)
+        ++count.sent;
+    else
+        ++count.send_errors;
 }
 
 /* Sends a request until the state moves on from state, a few times. */
@@ -341,6 +396,8 @@ static const char *join(void) {
         /* The AP checks our M2 with the key from the password: with the wrong one, it never sends M3. */
         why = sta.state == WIFI_STA_STATE_WAIT_M3 ? "Wrong password" : "It didn't start the handshake";
     }
+    /* Associated, perhaps, but not joined: say so, rather than leave the router waiting. */
+    send(wifi_sta_build_deauth(&sta, frame_out()));
     return why;
 }
 
@@ -363,16 +420,21 @@ const char *net_join(const char *ssid, const char *pass, void (*status)(unsigned
     want_len = (unsigned)strlen(ssid);
     memset(&found, 0, sizeof found);
     found.rssi = -128;
+    answers = 0;
     at(NET_STEP_FINDING);
     fm1_wifi_mac_wr(FM1_WIFI_RX_FILTER, FM1_WIFI_RX_FILTER_ALL);
     for (unsigned pass_n = 0; pass_n < FIND_PASSES && found.rssi == -128; ++pass_n)
-        for (unsigned ch = 1; ch <= 13; ++ch)
+        for (unsigned ch = 1; ch <= 13; ++ch) {
+            fm1_wifi_set_channel(ch);
+            probe(ssid, want_len);
             listen(ch, on_find);
+        }
     if (found.rssi == -128)
         return "Not heard here";
     r->rssi = found.rssi;
     r->channel = found.channel;
-    app_log("%s: channel %u, %d dBm, security %u", ssid, found.channel, found.rssi, found.security);
+    app_log("%s: channel %u, %d dBm, security %u, %u probe responses", ssid, found.channel, found.rssi, found.security,
+            answers);
     if (found.security == NET_OTHER)
         return "Not WPA2: can't join it";
     open_net = found.security == NET_OPEN;

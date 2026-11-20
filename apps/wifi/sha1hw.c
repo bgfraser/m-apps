@@ -41,7 +41,14 @@ static bool run(uint32_t h[5], const uint8_t *p) {
 }
 
 int sha1_hw_block(uint32_t h[5], const uint8_t *p) {
-    return state == WORKS && run(h, p);
+    if (state != WORKS)
+        return 0;
+    if (run(h, p))
+        return 1;
+    /* It stopped finishing: software for the rest of the run, rather than a timeout on every block. */
+    state = FAILS;
+    app_log("SHA-1 unit stopped finishing: software from here");
+    return 0;
 }
 
 bool sha1_hw_check(void) {

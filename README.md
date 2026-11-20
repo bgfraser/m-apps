@@ -257,7 +257,7 @@ One setting a line: the value is everything after the first `=`, spaces and all.
 - **The clock:** started from the card at 360 MHz, it drops to 320 MHz, as the datasheet rates the chip, and goes back before returning. At 360 MHz with the radio on, the store experiment's crypto went wrong at times.
 - **Leaving** turns the radio off as it was found (`net_off()`): a launcher that got it back still on showed a black screen.
 
-Tested on both boards from `run-ram`: an open network gave an address in about 3 s, and a WPA2 one in 4 to 8 s with the signal at -50 to -62 dBm. From the card's launcher on the FM-1 (at 360 MHz, so with the switch to 320): a scan, and the way back to the launcher. Joining from there hasn't been tried yet. `make build/any/wifi.app WIFI_TEST=-DWIFI_AUTOTEST` (after `touch apps/wifi/wifi.c`) builds a version that needs no keys: it scans, then tests every network in `WIFI.TXT`, all in its log.
+Tested on both boards from `run-ram`: an open network gave an address in about 3 s, and a WPA2 one in 4 to 8 s with the signal at -50 to -62 dBm. From the card's launcher on the FM-1 (at 360 MHz, so with the switch to 320): a scan, and the way back to the launcher. Joining from there hasn't been tried yet. A name typed for a network not heard is asked for by name (a probe request), as a hidden network answers only that. `make build/any/wifi.app WIFI_TEST=-DWIFI_AUTOTEST` builds a version that needs no keys: it scans, then tests every network in `WIFI.TXT`, all in its log.
 
 ## License
 

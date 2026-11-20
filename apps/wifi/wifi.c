@@ -6,6 +6,7 @@
 #include "canvas.h"
 #include "card.h"
 #include "fat.h"
+#include "fm1_time.h"
 #include "keys.h"
 #include "net.h"
 #include "screens.h"
@@ -29,10 +30,12 @@ static unsigned heard_count;
 static char text[WIFI_TEXT_MOST] __attribute__((aligned(4)));
 static char out[WIFI_TEXT_MOST] __attribute__((aligned(4)));
 static unsigned text_n;
-static bool too_big;
+/* Why the file can't be changed here, or 0. */
+static const char *locked;
 static struct keys keys;
 static unsigned board, lsb;
-static bool card_ok;
+/* The card answered (and needs card_finish() before leaving), and it's mounted. */
+static bool card_started, card_ok;
 
 /* ---- the clock ---- */
 
@@ -80,75 +83,89 @@ static void card_on(void) {
 static const char *read_list(void) {
     memset(&list, 0, sizeof list);
     text_n = 0;
-    too_big = false;
+    locked = 0;
     card_open(lsb);
     uint32_t sectors = card_start(lsb);
+    card_started |= sectors != 0;
     const char *note = NO_CARD;
+    /* Whether what the card holds is known: read, or surely not there. Only then can it be saved over. */
+    bool known = false;
     if (sectors) {
         note = fat_mount(sectors);
         if (!note) {
             card_ok = true;
-            uint32_t folder = fat_root();
+            uint32_t root = fat_root(), folder = root;
             struct fat_entry file;
             bool found = false;
-            if (!fat_find(folder, FILE_NAME, &file, &found) && found) {
+            /* Read it, or know it isn't there: a failed look is neither, and saving then could lose the file. */
+            if (!fat_folder(&folder, FILE_NAME, ""))
+                note = locked = "WIFI.TXT is a folder";
+            else if (fat_find(root, FILE_NAME, &file, &found))
+                note = locked = "WIFI.TXT couldn't be read";
+            else if (!found)
+                note = "No WIFI.TXT yet", known = true;
+            else {
                 uint32_t n = file.size < sizeof text ? file.size : sizeof text;
-                too_big = file.size > sizeof text;
                 if (!fat_read(&file, 0, text, n)) {
-                    note = "WIFI.TXT couldn't be read";
-                    too_big = true;
+                    note = locked = "WIFI.TXT couldn't be read";
                 } else {
                     text_n = n;
                     wifi_list_read(&list, text, n);
+                    known = true;
+                    /* Changing only the start of a file would lose the rest. */
+                    if (file.size > sizeof text)
+                        note = locked = "WIFI.TXT is too big to change here";
                 }
-            } else {
-                note = "No WIFI.TXT yet";
             }
         }
     }
     card_close();
+    if (!known && !locked)
+        locked = note;
     if (!note && list.skipped)
         note = "Some of WIFI.TXT was left out";
     app_log("WIFI.TXT: %u networks, use %u, %u left out: %s", list.count, list.use, list.skipped, note ? note : "ok");
     return note;
 }
 
-/* Writes the list to WIFI.TXT, the old one replaced only once the new one is whole: 0, or what went wrong. */
+/* Writes the list to WIFI.TXT, the old one replaced only once the new one is whole: 0, or what went wrong. Afterwards the
+ * list is what the card holds: the new one, or, if it failed, the old one read again. */
 static const char *save_list(void) {
-    /* Changing only part of a file would lose the rest. */
-    if (too_big)
-        return "WIFI.TXT is too big to change here";
-    unsigned n = wifi_list_write(&list, text, text_n, out, WIFI_TEXT_MOST);
-    if (!n)
+    if (locked)
+        return locked;
+    unsigned n;
+    if (!wifi_list_write(&list, text, text_n, out, WIFI_TEXT_MOST, &n))
         return "Too much to save";
     unsigned whole = (n+511u)&~511u;
     memset(out+n, 0, whole-n);
     card_on();
     uint32_t folder = fat_root(), start = 0;
     struct fat_entry old;
-    bool found = false;
+    bool found = false, named = false;
     const char *error = fat_find(folder, FILE_NAME, &old, &found);
     if (!error)
         error = fat_reserve(n, &start);
-    if (!error) {
-        if (!fat_write(start, 0, out, whole))
-            error = "The card didn't take it";
-        else
-            error = found ? fat_swap(folder, FILE_NAME, start, n) : fat_add(folder, FILE_NAME, FAT_ATTR_ARCHIVE, start, n);
-        if (error)
-            fat_release(start);
+    if (!error && whole && !fat_write(start, 0, out, whole)) {
+        /* Nothing names the new chain yet. */
+        fat_release(start);
+        error = "The card didn't take it";
+    } else if (!error) {
+        /* From here the directory may name the new chain, so it's never freed here: at worst, a failure leaves clusters
+         * no file uses, which fsck can reclaim. */
+        error = found ? fat_swap(folder, FILE_NAME, start, n) : fat_add(folder, FILE_NAME, FAT_ATTR_ARCHIVE, start, n);
+        named = !error;
+        if (!error)
+            error = fat_commit();
     }
-    if (!error)
-        error = fat_commit();
     card_close();
     app_log("saved WIFI.TXT, %u bytes: %s", n, error ? error : "ok");
-    if (!error) {
-        /* What's on the card now, and the list as read from it. */
+    if (named) {
+        /* What's on the card now, and the list as read from it (use= with it). */
         memcpy(text, out, n);
         text_n = n;
-        unsigned use = list.use;
         wifi_list_read(&list, text, n);
-        list.use = use < list.count ? use : 0;
+    } else if (error) {
+        read_list();
     }
     return error;
 }
@@ -301,14 +318,19 @@ static void progress(unsigned done, unsigned total) {
     canvas_send();
 }
 
-/* Scans, and adds a network chosen from those heard or typed: what to say on the list, or 0. */
-static const char *add_network(void) {
-    if (list.count == WIFI_MOST)
-        return "The list is full: delete one first";
+/* Listens for networks, into heard. */
+static void scan(void) {
     canvas_forget();
     screen_scanning(0, 13);
     canvas_send_all();
     heard_count = net_scan(heard, MOST_HEARD, progress);
+}
+
+/* Scans, and adds a network chosen from those heard or typed: what to say on the list, or 0. */
+static const char *add_network(void) {
+    if (list.count == WIFI_MOST)
+        return "Full: delete one first";
+    scan();
     unsigned selection = 0;
     for (;;) {
         unsigned items = screen_heard_items(heard_count);
@@ -381,6 +403,9 @@ static const char *network_page(unsigned index) {
     const char *note = 0;
     uint16_t note_colour = CANVAS_DIM;
     for (;;) {
+        /* A failed save reads the card again, which can change the list. */
+        if (index >= list.count)
+            return note;
         uint8_t actions[4];
         unsigned count = 0;
         actions[count++] = ACTION_TEST;
@@ -434,6 +459,15 @@ static const char *network_page(unsigned index) {
 
 /* ---- the app ---- */
 
+/* Everything as it was found, before returning: the radio off, the card, the board's pins, the clock. */
+static void finish(void) {
+    net_off();
+    if (card_started)
+        leave_card();
+    board_restore();
+    clock_back();
+}
+
 int app_main(unsigned lsb_mhz) {
     lsb = clock_320(lsb_mhz);
     board = app_board();
@@ -444,6 +478,8 @@ int app_main(unsigned lsb_mhz) {
         return 1;
     }
     app_log("board %u, LSB %u MHz (given %u)", board, lsb, lsb_mhz);
+    /* TIMER4, which the delete's hold and the cursor's blink read, may not be running yet. */
+    fm1_time_init();
     board_init(board == 2);
     keys_init(board == 2);
     display_init(board);
@@ -455,10 +491,7 @@ int app_main(unsigned lsb_mhz) {
     /* make ... WIFI_TEST=-DWIFI_AUTOTEST: no keys, for a test from a computer. What's heard, then each saved network
      * joined, all in the log. */
     {
-        canvas_forget();
-        screen_scanning(0, 13);
-        canvas_send_all();
-        heard_count = net_scan(heard, MOST_HEARD, progress);
+        scan();
         for (unsigned i = 0; i < heard_count; ++i)
             app_log("heard '%s': %d dBm, channel %u, security %u", heard[i].ssid, heard[i].rssi, heard[i].channel,
                     heard[i].security);
@@ -470,11 +503,7 @@ int app_main(unsigned lsb_mhz) {
             screen_test(board, list.net[i].ssid, r.step, true, why, &r, "Test", CANVAS_DIM, "");
             canvas_send_all();
         }
-        net_off();
-        if (card_ok)
-            leave_card();
-        board_restore();
-        clock_back();
+        finish();
         return 0;
     }
 #endif
@@ -516,10 +545,6 @@ int app_main(unsigned lsb_mhz) {
                 selection = list.count;
         }
     }
-    net_off();
-    if (card_ok)
-        leave_card();
-    board_restore();
-    clock_back();
+    finish();
     return 0;
 }

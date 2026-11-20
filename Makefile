@@ -24,6 +24,12 @@ mp3_CFLAGS := -O2 -Iapps/mp3
 # 4096 SHA-1 rounds and the crypto want speed.
 wifi_CFLAGS := -O2 -std=gnu99 -Iapps/wifi -Iapps/wifi/bsp -Wno-unused-function -Wno-unused-variable -Wno-unused-parameter \
 	-Wno-sign-compare -Wno-undefined-internal -include string.h -DWC_SHA1_HW=sha1_hw_block $(WIFI_TEST)
+# WIFI_TEST=-DWIFI_AUTOTEST builds the version that needs no keys. Its objects remember the flag they were built with,
+# so changing it rebuilds them.
+build/wifi-test.txt: FORCE
+	@mkdir -p build
+	@echo '$(WIFI_TEST)' | cmp -s - $@ || echo '$(WIFI_TEST)' > $@
+$(foreach b,fm1 smk37 any,$(patsubst apps/wifi/%.c,build/$(b)/wifi/%.o,$(wildcard apps/wifi/*.c))): build/wifi-test.txt
 # Kit files can have their own flags too: the shared look's drawing runs while sound has to keep time.
 kit_pixel_CFLAGS := -O2
 kit_canvas_CFLAGS := -O2
