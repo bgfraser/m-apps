@@ -200,10 +200,19 @@ A write has reached the card before the computer is told it succeeded, and data 
 - Spotlight can hold the disk for a while, so Eject may be refused at first. It took 38 s in testing. The app ends once the eject goes through.
 - macOS adds its own hidden `.Spotlight-V100` and `.fseventsd` folders to the card.
 
+### unbrick
+
+[M-Unbricker](https://github.com/jvitkauskas/m-unbricker), from the card: it repairs a broken FM-1 or SMK-37 with this one and a USB-C cable, with no computer. It guides you on the screen: move the cable to the broken unit and switch that on, and it puts its ROM in download mode with JieLi's USB_KEY, writes a fresh m-bootloader, erases the rest, and checks it. Either model can repair either.
+
+It's its own repo, here as the `m-unbricker` submodule, and its own Makefile builds it: what it makes is already an app, so `make` copies it to `build/<board>/unbrick.app`, and `make card` puts it in `/MBOOT/APPS/UNBRICK`. To update it, move the submodule. The launcher starts it with the LSB clock, as m-bootloader's MIDI mode does, which it already handles. It doesn't return: at the end it restarts the unit.
+
+Started from the launcher on a unit with a card mod, it has repaired an FM-1 from an SMK-37 Pro and an SMK-37 Pro from an FM-1.
+
 ## License
 
 MIT, as m-bootloader is. See [LICENSE](LICENSE). Two parts have their own licences, and each file's header says which:
 
 - `kit/audio.c` and `kit/audio.h` are MPL-2.0, adapted from [felucca-bsp](https://github.com/hugelton/felucca-bsp). MPL applies file by file, so changes to these two files stay MPL-2.0, and an app using them can have any licence.
 - `apps/mp3/minimp3.h` is [minimp3](https://github.com/lieff/minimp3), CC0-1.0.
+- `unbrick` is built from the `m-unbricker` submodule (MIT). It holds glyphs rendered from DejaVu Sans (Bitstream Vera licence and public domain), and its own list in `m-unbricker/THIRD-PARTY.md`.
 - `apps/picker/font.h` is Barlow Semi Condensed, under the SIL Open Font License 1.1 (`apps/picker/Barlow-OFL.txt`), as 4-bit alpha made by fm1-base's `tools/gen_font.py`.

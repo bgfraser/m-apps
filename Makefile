@@ -27,7 +27,7 @@ picker_ORIGIN := 0x1c0a800
 picker_LENGTH := 0xc000
 picker_STACK := 0x2000
 
-all: $(foreach a,$(APPS),build/fm1/$(a).app build/smk37/$(a).app) build/fm1/logread.bin build/smk37/logread.bin build/fm1/MENU.BIN build/smk37/MENU.BIN build/fm1/LAUNCH.BIN build/smk37/LAUNCH.BIN
+all: $(foreach a,$(APPS) unbrick,build/fm1/$(a).app build/smk37/$(a).app) build/fm1/logread.bin build/smk37/logread.bin build/fm1/MENU.BIN build/smk37/MENU.BIN build/fm1/LAUNCH.BIN build/smk37/LAUNCH.BIN
 
 clean:
 	rm -rf build
@@ -97,8 +97,17 @@ build/%/LAUNCH.BIN: build/%/picker.elf tools/launch.py
 	$(OBJCOPY) -O binary -j .text $< build/$*/picker.raw
 	python3 tools/launch.py $* build/$*/picker.raw $@
 
+# M-Unbricker is its own repo, here as the m-unbricker submodule, and its own Makefile builds it: what it makes is
+# already an app. It's on the card as /MBOOT/APPS/UNBRICK, with apps/unbrick's META.TXT and ICON.QOI.
+build/%/unbrick.app: FORCE
+	@mkdir -p $(@D)
+	$(MAKE) -C m-unbricker TOOLCHAIN=$(abspath $(TOOLCHAIN)) build/m-unbricker-$*.bin
+	cp m-unbricker/build/m-unbricker-$*.bin $@
+FORCE:
+.PHONY: FORCE
+
 # make card BOARD=smk37: build/smk37/card/MBOOT, the launcher and these apps in their folders, to copy to a card.
-CARD_APPS := hello usbdisk slots tone mp3
+CARD_APPS := hello usbdisk slots tone mp3 unbrick
 card: build/$(BOARD)/MENU.BIN build/$(BOARD)/LAUNCH.BIN $(foreach a,$(CARD_APPS),build/$(BOARD)/$(a).app)
 	rm -rf build/$(BOARD)/card
 	mkdir -p build/$(BOARD)/card/MBOOT/APPS
