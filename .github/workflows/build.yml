@@ -33,6 +33,11 @@ jobs:
         run: make -j2
       - name: Tests
         run: make test
+      - name: libFuzzer for the runner's clang
+        shell: bash
+        run: |
+          v=$(clang --version | sed -nE 's/.*clang version ([0-9]+).*/\1/p' | head -1)
+          sudo apt-get install -y -q "libclang-rt-$v-dev"
       - name: Fuzz the parsers, 15 s each
         run: make fuzz FUZZ_SECONDS=15
       - name: The release's tars
