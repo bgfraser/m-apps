@@ -77,6 +77,27 @@ void app_guard(bool on) {
 
 /* The app's stacks may be what broke, but there's nothing better to run on. A second fault or a hang here ends with
  * the watchdog, and the log still says what happened. */
+static unsigned detected;
+
+unsigned app_detect_board(void) {
+    if (detected)
+        return detected;
+    uint8_t mark[8];
+    if (!flash_init(1, 1))
+        return 0;
+    if (flash_read(0, 0xc1224u, mark, 8) && !memcmp(mark, "trimdat", 8))
+        detected = 2;
+    else if (flash_read(0, 0xff000u, mark, 8) && !memcmp(mark, "TRIMCOPY", 8))
+        detected = 2;
+    else {
+        uint32_t id = flash_jedec()&0xffffffu;
+        if (id == 0x856014u || id == 0xb36014u)
+            detected = 1;
+    }
+    app_log("board %u, from the flash (chip %06x)", detected, (unsigned)(flash_jedec()&0xffffffu));
+    return detected;
+}
+
 void app_crash(void) __attribute__((noreturn));
 void app_crash(void) {
     uint32_t cause = EMU_MSG, near, called_from;
@@ -85,7 +106,8 @@ void app_crash(void) {
     app_log("CRASH: cause %08x near %08x, last call from %08x", (unsigned)cause, (unsigned)near, (unsigned)called_from);
     app_log_crashed();
     /* The reset turns the screen off, so the message has to come first. */
-    if (display_init(APP_BOARD)) {
+    /* Only a board already known: a crash is no time to read flash. */
+    if (display_init(APP_BOARD ? APP_BOARD : detected)) {
         for (unsigned row = 0; row < 15; ++row)
             display_text(row, 0xffff, "");
         display_text(1, 0xf800, "APP CRASHED");
@@ -126,6 +148,15 @@ int app_start(uint32_t argument) {
     app_log_end(result);
     app_guard(false);
     if (from_rom) {
+        /* The SMK-37's panel keeps its picture through the reset, so the app's last screen would stay up as if it were
+         * still running: say what it is now. Only a board already known. */
+        unsigned board = APP_BOARD ? APP_BOARD : detected;
+        if (board && display_init(board)) {
+            for (unsigned row = 0; row < 15; ++row)
+                display_text(row, 0xffff, "");
+            display_text(1, 0x07e0, "THE APP HAS ENDED");
+            display_text(3, 0xffff, "IN DOWNLOAD MODE");
+        }
         /* Download mode keeps RAM, where firmware would overwrite the log. */
         memcpy(RETAINED, DOWNLOAD_MODE, DOWNLOAD_MODE_SIZE);
         sync_cpu();

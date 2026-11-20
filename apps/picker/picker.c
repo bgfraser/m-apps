@@ -19,13 +19,10 @@
 #define T4_CNT (*(volatile uint32_t *)0x10804u)
 #define T4_PRD (*(volatile uint32_t *)0x10808u)
 #define T4_PER_MS 24000u
-#if APP_BOARD == 2
-#define KEYS "< > MOVE   SEQ PLAY START"
-#define KEY_BACK_HINT "SEQ PLAY: BACK"
-#else
-#define KEYS "OCT-/+ MOVE   PLAY START"
-#define KEY_BACK_HINT "PLAY: BACK"
-#endif
+/* The board the launcher is on, from app_board(): 1 FM-1, 2 SMK-37. */
+static unsigned board;
+#define KEYS (board == 2 ? "< > MOVE   SEQ PLAY START" : "OCT-/+ MOVE   PLAY START")
+#define KEY_BACK_HINT (board == 2 ? "SEQ PLAY: BACK" : "PLAY: BACK")
 
 /* All in the apps' slot, which is free until an app loads over it; the launcher reads and draws it all again then. */
 struct work {
@@ -203,7 +200,7 @@ static unsigned press(void) {
         char k = script[script_at++];
         script_last = T4_CNT;
         app_log("script: %c", k);
-        return k == '<' ? KEY_PREV:k == '>' ? KEY_NEXT:k == 's' ? KEY_SELECT:0u;
+        return k == '<' ? KEY_PREV:k == '>' ? KEY_NEXT:k == 's' ? KEY_SELECT:k == 'r' ? KEY_RECOVERY:0u;
     }
 #endif
     unsigned now = board_keys(), pressed = 0;
@@ -266,13 +263,18 @@ int app_main(unsigned lsb_mhz) {
 #ifdef KEY_SCRIPT
     script_last = T4_CNT;
 #endif
+    board = app_board();
+    if (!board) {
+        /* Its pins aren't known, so nothing is touched: back to the bootloader's menu. */
+        app_log("which board this is isn't known");
+        return 1;
+    }
     for (;;) {
-        board_init(APP_BOARD == 2);
-        display_init(APP_BOARD);
-#if APP_BOARD == 2
+        board_init(board == 2);
+        display_init(board);
         /* The SMK-37's panel takes a faster clock than the bootloader gives it: from LSB/5 to LSB/2. */
-        REG(0x11d04) = 1;
-#endif
+        if (board == 2)
+            REG(0x11d04) = 1;
         scene_init(W->layer, T4_CNT);
         const char *error = read_list(lsb_mhz);
         if (error)
@@ -302,7 +304,11 @@ int app_main(unsigned lsb_mhz) {
         while (!start) {
             uint32_t frame = T4_CNT;
             unsigned keys = press();
-            if (keys&KEY_SELECT)
+            if (keys&KEY_RECOVERY) {
+                /* REC (SEQ REC) leaves, as "Back" does. */
+                selection = count;
+                start = true;
+            } else if (keys&KEY_SELECT)
                 start = true;
             else if (!error && keys&(KEY_PREV|KEY_NEXT)) {
                 unsigned was = selection, old_first = first;
@@ -358,7 +364,7 @@ int app_main(unsigned lsb_mhz) {
         draw(0, SCENE_BAR_Y, SCENE_SIZE, SCENE_SIZE);
         card_open(lsb_mhz);
         card_fast(lsb_mhz);
-        note = app_file_load(&a->file, (void *)(uintptr_t)APP_ADDRESS, APP_BOARD);
+        note = app_file_load(&a->file, (void *)(uintptr_t)APP_ADDRESS, board);
         if (note) {
             app_log("%s: %s", a->text.name, note);
             card_close();

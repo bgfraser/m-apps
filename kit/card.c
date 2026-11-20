@@ -3,20 +3,16 @@
  * selected while that's high (m-bootloader's docs/SPEC.md §11.5 for the FM-1).
  * FM-1: CLK PC9, DI PC10, DO PC8, CS = NOT PC7. SMK-37: CLK PB6, DI PB7, DO PB5, CS = NOT PC8. */
 #include "card.h"
+#include "app.h"
 #include "log.h"
 #include "platform.h"
 #define SPI1 0x11d00u
-#if APP_BOARD == 2
+/* The SMK-37's card mod selects with PC8 (through an inverter) and answers on PB5; the FM-1's on PC7 and PC8. */
+#define SMK (app_board() == 2)
 #define CS_PORT 2
-#define CS_PIN 8
-#define DO_PORT 1
-#define DO_PIN 5
-#else
-#define CS_PORT 2
-#define CS_PIN 7
-#define DO_PORT 2
-#define DO_PIN 8
-#endif
+#define CS_PIN (SMK ? 8 : 7)
+#define DO_PORT (SMK ? 1 : 2)
+#define DO_PIN (SMK ? 5 : 8)
 #define RETRIES 3u
 /* Single-block commands, and the wait for a block's start or for a write to finish. */
 #define TOKEN_WAIT 200000u

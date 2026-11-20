@@ -14,15 +14,19 @@ static void show_mhz(unsigned row, unsigned mhz) {
 }
 
 int app_main(unsigned lsb_mhz) {
-    app_log("hello on board %d, %s", APP_BOARD, app_folder() ? "from its folder":"not from a folder");
-    board_init(APP_BOARD == 2);
-    bool screen = display_init(APP_BOARD);
+    unsigned board = app_board();
+    app_log("hello on board %d (built for %d), %s", board, APP_BOARD, app_folder() ? "from its folder":"not from a folder");
+    if (!board)
+        return 1;
+    board_init(board == 2);
+    bool screen = display_init(board);
     app_log("screen %s", screen ? "found":"not found");
     if (screen) {
         for (unsigned row = 0; row < 15; ++row)
             display_text(row, WHITE, "");
         display_text(1, GREEN, "HELLO FROM RAM");
-        display_text(3, WHITE, APP_BOARD == 2 ? "SMK-37" : "FM-1");
+        display_text(3, WHITE, board == 2 ? "SMK-37" : "FM-1");
+        display_text(9, GREEN, APP_BOARD ? "BUILT FOR IT" : "ONE FILE FOR BOTH");
         show_mhz(4, lsb_mhz);
         if (app_folder())
             display_text(5, WHITE, "FROM ITS FOLDER");

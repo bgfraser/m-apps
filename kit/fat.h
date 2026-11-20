@@ -51,6 +51,14 @@ bool fat_write(uint32_t start, uint32_t offset, const void *from, uint32_t n);
 const char *fat_release(uint32_t start);
 /* Adds a directory entry: an 8.3 name, padded with spaces to 11 bytes, that the directory doesn't hold yet. */
 const char *fat_add(uint32_t directory, const char name[11], unsigned attributes, uint32_t start, uint32_t size);
+/* The same with a long name too, as a computer shows it: printable ASCII, not \\ / : * ? " < > |, not ending in a space or a
+ * dot, at most FAT_LONG_PIECES*13 characters. The short name is still the caller's to make unique. All the entries go in
+ * one directory sector, so the file appears whole or not at all. fat_remove() takes them all away again. */
+#define FAT_LONG_PIECES 5u
+/* Whether fat_add_named() takes a long name, to ask before anything is written. */
+bool fat_long_name_ok(const char *long_name);
+const char *fat_add_named(uint32_t directory, const char name[11], const char *long_name, unsigned attributes,
+                          uint32_t start, uint32_t size);
 /* Points a directory entry at another chain, and frees the old one. */
 const char *fat_swap(uint32_t directory, const char name[11], uint32_t start, uint32_t size);
 const char *fat_remove(uint32_t directory, const char name[11]);
