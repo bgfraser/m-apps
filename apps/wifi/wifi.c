@@ -452,6 +452,7 @@ int app_main(unsigned lsb_mhz) {
             screen_test(board, list.net[i].ssid, r.step, true, why, &r, "Test", CANVAS_DIM, "");
             canvas_send_all();
         }
+        net_off();
         if (card_ok)
             leave_card();
         board_restore();
@@ -497,7 +498,7 @@ int app_main(unsigned lsb_mhz) {
                 selection = list.count;
         }
     }
-    net_leave();
+    net_off();
     if (card_ok)
         leave_card();
     board_restore();

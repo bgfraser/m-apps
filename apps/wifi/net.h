@@ -32,4 +32,7 @@ struct net_result {
 const char *net_join(const char *ssid, const char *pass, void (*status)(unsigned step), struct net_result *r);
 /* Leaves the network joined, if any. */
 void net_leave(void);
+/* Leaves it, and turns the radio off as it was found: before an app returns, as what runs next doesn't expect it on. The
+ * next scan or join starts it again. */
+void net_off(void);
 #endif

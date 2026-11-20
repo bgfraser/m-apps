@@ -32,6 +32,16 @@ static struct wc_pmk_job job;
 static uint8_t pmk[32], mac[6];
 static bool started, joined, open_net;
 
+/* What the radio's start-up changes outside the MAC, as it was found, for net_off(): the RF / BT enables (0x14000) and
+ * 0x14028, the Wi-Fi clock / reset block (0x14040-0x1405C) and the radio's analog settings (0x11900-0x11968). */
+#define WL_EN 0x14000u
+#define WL_28 0x14028u
+#define WL_CLOCK 0x14040u
+#define WL_CLOCK_N 8u
+#define WL_ANALOG 0x11900u
+#define WL_ANALOG_N 27u
+static struct { uint32_t en, w28, clock[WL_CLOCK_N], analog[WL_ANALOG_N]; } found_regs;
+
 static uint32_t t_last;
 static int64_t t_us;
 static int64_t now_us(void) {
@@ -89,6 +99,12 @@ static void start(void) {
     for (unsigned i = 0; i < 6; ++i)
         mac[i] = (uint8_t)(uid[i]^uid[(i+6)&7]^0x5a);
     mac[0] = (uint8_t)((mac[0]&0xfc)|0x02);
+    found_regs.en = REG(WL_EN);
+    found_regs.w28 = REG(WL_28);
+    for (unsigned i = 0; i < WL_CLOCK_N; ++i)
+        found_regs.clock[i] = REG(WL_CLOCK+4u*i);
+    for (unsigned i = 0; i < WL_ANALOG_N; ++i)
+        found_regs.analog[i] = REG(WL_ANALOG+4u*i);
     fm1_rf_cal_on = 1;
     uint32_t t0 = fm1_ticks();
     fm1_ble_rf_init(x106, x107, x108, x187);
@@ -417,4 +433,21 @@ void net_leave(void) {
         wifi_sta_clear_hw_keys();
     }
     joined = false;
+}
+
+void net_off(void) {
+    if (!started)
+        return;
+    net_leave();
+    /* The RF paths and BT off first, then the clock block and the analog settings as they were. */
+    REG(WL_EN) = found_regs.en;
+    sync_cpu();
+    REG(WL_28) = found_regs.w28;
+    for (unsigned i = 0; i < WL_CLOCK_N; ++i)
+        REG(WL_CLOCK+4u*i) = found_regs.clock[i];
+    for (unsigned i = 0; i < WL_ANALOG_N; ++i)
+        REG(WL_ANALOG+4u*i) = found_regs.analog[i];
+    sync_cpu();
+    started = false;
+    app_log("radio off");
 }
