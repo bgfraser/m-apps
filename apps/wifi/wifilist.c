@@ -2,7 +2,7 @@
 #include "wifilist.h"
 #include <string.h>
 
-static const char HEAD[] = "# WiFi networks for the apps on this card. use= is the one they join.\n"
+static const char HEAD[] = "# WiFi networks on this card. use= is the one to join.\n"
                            "# ssid= starts a network, password= is its password (none for an open one).\n";
 
 static unsigned length(const char *s, unsigned most) {
@@ -63,6 +63,23 @@ static bool copy(char *to, unsigned most, const char *from, unsigned n) {
     return true;
 }
 
+/* Takes network i out of the list, keeping use on the same network, or the first. */
+static void drop(struct wifi_list *l, unsigned i) {
+    memmove(&l->net[i], &l->net[i+1], (l->count-i-1)*sizeof l->net[0]);
+    --l->count;
+    if (l->use == i || l->use > l->count)
+        l->use = 0;
+    else if (l->use > i)
+        --l->use;
+}
+
+static int removed_at(const struct wifi_list *l, const char *ssid) {
+    for (unsigned i = 0; i < l->removed_count; ++i)
+        if (same(l->removed[i], ssid))
+            return (int)i;
+    return -1;
+}
+
 void wifi_list_read(struct wifi_list *l, const char *text, unsigned n) {
     memset(l, 0, sizeof *l);
     char use[WIFI_SSID_MOST+1] = {0};
@@ -98,6 +115,7 @@ void wifi_list_read(struct wifi_list *l, const char *text, unsigned n) {
             }
             net = &l->net[l->count++];
             memset(net, 0, sizeof *net);
+            net->in_file = true;
             bad = !copy(net->ssid, WIFI_SSID_MOST, value, value_n) || !wifi_ssid_ok(net->ssid);
         } else if (is(line, len, "password=", &value, &value_n)) {
             if (net && !bad)
@@ -112,7 +130,7 @@ void wifi_list_read(struct wifi_list *l, const char *text, unsigned n) {
     for (unsigned i = 1; i < l->count; ++i)
         for (unsigned j = 0; j < i; ++j)
             if (same(l->net[i].ssid, l->net[j].ssid)) {
-                wifi_list_remove(l, i--);
+                drop(l, i--);
                 ++l->skipped;
                 break;
             }
@@ -129,16 +147,123 @@ static bool put(char *out, unsigned most, unsigned *n, const char *s) {
     return true;
 }
 
-unsigned wifi_list_write(const struct wifi_list *l, char *out, unsigned most) {
-    unsigned n = 0;
-    bool ok = put(out, most, &n, HEAD);
-    if (l->count) {
-        ok = ok && put(out, most, &n, "use=") && put(out, most, &n, l->net[l->use < l->count ? l->use : 0].ssid)
-             && put(out, most, &n, "\n");
+static bool put_n(char *out, unsigned most, unsigned *n, const char *s, unsigned k) {
+    if (*n+k > most)
+        return false;
+    memcpy(out+*n, s, k);
+    *n += k;
+    return true;
+}
+
+/* A line: name, its value and the line end. */
+static bool put_line(char *out, unsigned most, unsigned *n, const char *name, const char *value, const char *nl) {
+    return put(out, most, n, name) && put(out, most, n, value) && put(out, most, n, nl);
+}
+
+unsigned wifi_list_write(const struct wifi_list *l, const char *old, unsigned old_n, char *out, unsigned most) {
+    unsigned n = 0, at = 0;
+    bool ok = true, written[WIFI_MOST] = {false}, use_set = false;
+    const char *use = l->count ? l->net[l->use < l->count ? l->use : 0].ssid : 0;
+    /* The file's line end, from its first line. */
+    const char *nl = "\n";
+    for (unsigned i = 0; i < old_n; ++i)
+        if (old[i] == '\n') {
+            if (i && old[i-1] == '\r')
+                nl = "\r\n";
+            break;
+        }
+    if (!old_n)
+        ok = put(out, most, &n, HEAD);
+    /* A use= anywhere is set where it is; with none, one goes before the first network. */
+    for (unsigned i = 0; i < old_n && !use_set; ) {
+        unsigned e = i;
+        while (e < old_n && old[e] != '\n')
+            ++e;
+        const char *value;
+        unsigned value_n;
+        if (is(old+i, e-i, "use=", &value, &value_n))
+            use_set = true;
+        i = e+1;
     }
+    bool had_use = use_set;
+    use_set = false;
+    if (old_n >= 3 && (unsigned char)old[0] == 0xef && (unsigned char)old[1] == 0xbb && (unsigned char)old[2] == 0xbf)
+        ok = put_n(out, most, &n, old, 3), at = 3;
+    /* The network whose lines these are: keep them as they are, rewrite its password (pending: none written yet), or
+     * drop them. */
+    enum { KEEP, OURS, DROP } mode = KEEP;
+    int ours = -1;
+    bool pending = false;
+    /* Where the blank line just copied began, and where it ended: a removed network takes it too, so adding and removing
+     * one leaves the file as it was. */
+    unsigned blank_at = 0, after_blank = (unsigned)-1;
+    while (ok && at < old_n) {
+        unsigned end = at;
+        while (end < old_n && old[end] != '\n')
+            ++end;
+        const char *line = old+at;
+        unsigned len = end-at, whole = end < old_n ? end-at+1 : end-at;
+        if (len && line[len-1] == '\r')
+            --len;
+        at = end+1;
+        const char *value;
+        unsigned value_n;
+        bool ssid = is(line, len, "ssid=", &value, &value_n);
+        /* A network's password with none in the file goes at the end of its settings. */
+        if (pending && (!len || line[0] == '#' || ssid)) {
+            ok = put_line(out, most, &n, "password=", l->net[ours].pass, nl);
+            pending = false;
+        }
+        if (!len || line[0] == '#') {
+            unsigned before = n;
+            ok = ok && put_n(out, most, &n, line, whole);
+            if (!len)
+                blank_at = before, after_blank = n;
+        } else if (ssid) {
+            if (use && !use_set && !had_use) {
+                ok = ok && put_line(out, most, &n, "use=", use, nl) && put(out, most, &n, nl);
+                use_set = true;
+            }
+            char name[WIFI_SSID_MOST+1];
+            int i = copy(name, WIFI_SSID_MOST, value, value_n) ? wifi_list_find(l, name) : -1;
+            if (i >= 0 && !written[i]) {
+                mode = OURS;
+                ours = i;
+                written[i] = true;
+                pending = l->net[i].pass[0] != 0;
+                ok = ok && put_n(out, most, &n, line, len) && put(out, most, &n, nl);
+            } else if (i < 0 && value_n <= WIFI_SSID_MOST && removed_at(l, name) >= 0) {
+                mode = DROP;
+                if (n == after_blank)
+                    n = blank_at;
+            } else {
+                mode = KEEP;
+                ok = ok && put_n(out, most, &n, line, whole);
+            }
+        } else if (is(line, len, "password=", &value, &value_n) && mode != KEEP) {
+            if (mode == OURS) {
+                ok = ok && put_line(out, most, &n, "password=", l->net[ours].pass, nl);
+                pending = false;
+            }
+        } else if (is(line, len, "use=", &value, &value_n)) {
+            if (use)
+                ok = ok && put_line(out, most, &n, "use=", use, nl);
+            use_set = true;
+        } else if (mode != DROP) {
+            ok = ok && put_n(out, most, &n, line, whole);
+        }
+        /* A last line with no end gets one, so what's added after starts on a line of its own. */
+        if (ok && at > old_n && n && out[n-1] != '\n')
+            ok = put(out, most, &n, nl);
+    }
+    if (pending)
+        ok = ok && put_line(out, most, &n, "password=", l->net[ours].pass, nl);
+    if (use && !use_set && !had_use)
+        ok = ok && put_line(out, most, &n, "use=", use, nl);
     for (unsigned i = 0; i < l->count; ++i)
-        ok = ok && put(out, most, &n, "\nssid=") && put(out, most, &n, l->net[i].ssid) && put(out, most, &n, "\npassword=")
-             && put(out, most, &n, l->net[i].pass) && put(out, most, &n, "\n");
+        if (!written[i])
+            ok = ok && put(out, most, &n, nl) && put_line(out, most, &n, "ssid=", l->net[i].ssid, nl)
+                 && put_line(out, most, &n, "password=", l->net[i].pass, nl);
     return ok ? n : 0;
 }
 
@@ -157,7 +282,15 @@ int wifi_list_put(struct wifi_list *l, const char *ssid, const char *pass) {
         if (l->count == WIFI_MOST)
             return -1;
         i = (int)l->count++;
+        memset(&l->net[i], 0, sizeof l->net[i]);
         set(l->net[i].ssid, ssid);
+        /* Removed and put back: it's still in the file, where its password is changed. */
+        int r = removed_at(l, ssid);
+        if (r >= 0) {
+            memmove(l->removed[r], l->removed[r+1], (l->removed_count-(unsigned)r-1)*sizeof l->removed[0]);
+            --l->removed_count;
+            l->net[i].in_file = true;
+        }
     }
     set(l->net[i].pass, pass);
     l->use = (unsigned)i;
@@ -167,11 +300,8 @@ int wifi_list_put(struct wifi_list *l, const char *ssid, const char *pass) {
 void wifi_list_remove(struct wifi_list *l, unsigned i) {
     if (i >= l->count)
         return;
-    memmove(&l->net[i], &l->net[i+1], (l->count-i-1)*sizeof l->net[0]);
-    --l->count;
-    /* With the one to use gone, it's the first. */
-    if (l->use == i || l->use > l->count)
-        l->use = 0;
-    else if (l->use > i)
-        --l->use;
+    /* At most WIFI_MOST were read, and each is recorded once. */
+    if (l->net[i].in_file && l->removed_count < WIFI_MOST)
+        set(l->removed[l->removed_count++], l->net[i].ssid);
+    drop(l, i);
 }

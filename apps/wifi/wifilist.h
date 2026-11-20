@@ -1,7 +1,8 @@
 /* SPDX-License-Identifier: MIT */
-/* The WiFi networks an app may join, in /MBOOT/WIFI.TXT, a text file to edit on a computer or with the WiFi app:
+/* The WiFi networks to join, in /WIFI.TXT at the card's root, for any firmware or app on the unit: a text file to edit
+ * on a computer or with the WiFi app. docs/WIFI-TXT.md is the format:
  *
- *     # WiFi networks for the apps on this card. use= is the one they join.
+ *     # WiFi networks on this card. use= is the one to join.
  *     use=Home
  *
  *     ssid=Home
@@ -25,24 +26,32 @@
 #define WIFI_PASS_LEAST 8u
 #define WIFI_PASS_MOST 63u
 #define WIFI_MOST 12u
-/* What a file this module writes can take, at most: room for the comment, use= and WIFI_MOST networks. */
-#define WIFI_TEXT_MOST 2048u
+/* The largest file this module reads and changes. */
+#define WIFI_TEXT_MOST 4096u
 
 struct wifi_net {
     char ssid[WIFI_SSID_MOST+1];
     char pass[WIFI_PASS_MOST+1];
+    bool in_file;               /* read from the file, so removing it takes it out of the file */
 };
 struct wifi_list {
     struct wifi_net net[WIFI_MOST];
     unsigned count;
-    unsigned use;               /* which one apps join; 0 with none */
+    unsigned use;               /* the one to join; 0 with none */
     unsigned skipped;           /* networks in the file that weren't read: too many, or a name or password that can't be */
+    /* The names removed since it was read, so that writing drops them from the file and nothing else. */
+    char removed[WIFI_MOST][WIFI_SSID_MOST+1];
+    unsigned removed_count;
 };
 
 /* Reads a file's text, n bytes, which needn't end in a zero. */
 void wifi_list_read(struct wifi_list *l, const char *text, unsigned n);
-/* The file's text for the list, in out with room for most: its length, or 0 if it doesn't fit. */
-unsigned wifi_list_write(const struct wifi_list *l, char *out, unsigned most);
+/* The file's text for the list, in out with room for most: its length, or 0 if it doesn't fit. It's the old text, n bytes
+ * (or none, 0 and 0), changed as little as can be: comments, blank lines, settings it doesn't know, and networks it
+ * skipped stay as they were, with its line ends. A network's password= is rewritten in place, a removed one's settings
+ * go with a blank line just before it (other blank lines and comments stay), use= is set where it is (or added before
+ * the first network), and new networks go at the end. */
+unsigned wifi_list_write(const struct wifi_list *l, const char *old, unsigned old_n, char *out, unsigned most);
 /* Whether a name, or a password, can go in the file and be joined: no line ends, and the lengths above. */
 bool wifi_ssid_ok(const char *ssid);
 bool wifi_pass_ok(const char *pass);

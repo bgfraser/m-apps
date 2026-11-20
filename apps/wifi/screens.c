@@ -137,7 +137,7 @@ unsigned screen_list_items(const struct wifi_list *l) {
 static void network_detail(const struct wifi_list *l, unsigned i, char *line, uint16_t *colour) {
     *colour = CANVAS_DIM;
     if (i == l->use) {
-        put(line, "Apps join this one");
+        put(line, "In use");
         *colour = CANVAS_GREEN;
     } else {
         put(line, l->net[i].pass[0] ? "Saved" : "Saved, open");
@@ -176,7 +176,7 @@ void screen_list(const struct wifi_list *l, unsigned board, unsigned selection, 
 
 /* ---- a saved network ---- */
 
-static const char *const labels[] = {"Test the connection", "Make apps join it", "Change the password", "Delete it"};
+static const char *const labels[] = {"Test the connection", "Use this one", "Change the password", "Delete it"};
 
 #define ACTION_Y 98
 #define ACTION_STEP 25

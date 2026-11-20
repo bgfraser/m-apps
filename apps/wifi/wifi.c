@@ -1,5 +1,5 @@
 /* SPDX-License-Identifier: MIT */
-/* Keeps the WiFi networks the card's apps join, in /MBOOT/WIFI.TXT (wifilist.h), and tests them: adding one from those
+/* Keeps the WiFi networks to join, in /WIFI.TXT at the card's root (wifilist.h), and tests them: adding one from those
  * heard, or by its name, with its password typed on the piano keys (kit/textentry.c), choosing the one to use, and
  * joining it to see it works (net.c). */
 #include "app.h"
@@ -19,14 +19,17 @@
 #define TIMER_COUNT REG(0x10804u)
 #define TICKS_PER_MS 24000u
 
-static const char FOLDER[11] = {'M', 'B', 'O', 'O', 'T', ' ', ' ', ' ', ' ', ' ', ' '};
 static const char FILE_NAME[11] = {'W', 'I', 'F', 'I', ' ', ' ', ' ', ' ', 'T', 'X', 'T'};
 static const char NO_CARD[] = "No card found";
 
 static struct wifi_list list;
 static struct net_ap heard[MOST_HEARD];
 static unsigned heard_count;
-static char text[4096] __attribute__((aligned(4)));
+/* The file as read, for a save to change in place (wifilist.h), and what's written. */
+static char text[WIFI_TEXT_MOST] __attribute__((aligned(4)));
+static char out[WIFI_TEXT_MOST] __attribute__((aligned(4)));
+static unsigned text_n;
+static bool too_big;
 static struct keys keys;
 static unsigned board, lsb;
 static bool card_ok;
@@ -76,6 +79,8 @@ static void card_on(void) {
 /* Reads WIFI.TXT, if there is one: what to say about it, or 0. */
 static const char *read_list(void) {
     memset(&list, 0, sizeof list);
+    text_n = 0;
+    too_big = false;
     card_open(lsb);
     uint32_t sectors = card_start(lsb);
     const char *note = NO_CARD;
@@ -86,12 +91,16 @@ static const char *read_list(void) {
             uint32_t folder = fat_root();
             struct fat_entry file;
             bool found = false;
-            if (!fat_folder(&folder, FOLDER, "") && !fat_find(folder, FILE_NAME, &file, &found) && found) {
+            if (!fat_find(folder, FILE_NAME, &file, &found) && found) {
                 uint32_t n = file.size < sizeof text ? file.size : sizeof text;
-                if (!fat_read(&file, 0, text, n))
+                too_big = file.size > sizeof text;
+                if (!fat_read(&file, 0, text, n)) {
                     note = "WIFI.TXT couldn't be read";
-                else
+                    too_big = true;
+                } else {
+                    text_n = n;
                     wifi_list_read(&list, text, n);
+                }
             } else {
                 note = "No WIFI.TXT yet";
             }
@@ -106,22 +115,23 @@ static const char *read_list(void) {
 
 /* Writes the list to WIFI.TXT, the old one replaced only once the new one is whole: 0, or what went wrong. */
 static const char *save_list(void) {
-    unsigned n = wifi_list_write(&list, text, WIFI_TEXT_MOST);
+    /* Changing only part of a file would lose the rest. */
+    if (too_big)
+        return "WIFI.TXT is too big to change here";
+    unsigned n = wifi_list_write(&list, text, text_n, out, WIFI_TEXT_MOST);
     if (!n)
         return "Too much to save";
     unsigned whole = (n+511u)&~511u;
-    memset(text+n, 0, whole-n);
+    memset(out+n, 0, whole-n);
     card_on();
     uint32_t folder = fat_root(), start = 0;
     struct fat_entry old;
     bool found = false;
-    const char *error = fat_make_folder(&folder, FOLDER);
-    if (!error)
-        error = fat_find(folder, FILE_NAME, &old, &found);
+    const char *error = fat_find(folder, FILE_NAME, &old, &found);
     if (!error)
         error = fat_reserve(n, &start);
     if (!error) {
-        if (!fat_write(start, 0, text, whole))
+        if (!fat_write(start, 0, out, whole))
             error = "The card didn't take it";
         else
             error = found ? fat_swap(folder, FILE_NAME, start, n) : fat_add(folder, FILE_NAME, FAT_ATTR_ARCHIVE, start, n);
@@ -132,6 +142,14 @@ static const char *save_list(void) {
         error = fat_commit();
     card_close();
     app_log("saved WIFI.TXT, %u bytes: %s", n, error ? error : "ok");
+    if (!error) {
+        /* What's on the card now, and the list as read from it. */
+        memcpy(text, out, n);
+        text_n = n;
+        unsigned use = list.use;
+        wifi_list_read(&list, text, n);
+        list.use = use < list.count ? use : 0;
+    }
     return error;
 }
 
@@ -252,13 +270,13 @@ static bool password_and_save(const char *ssid, bool ask, const char **note) {
         if (!why) {
             int i = wifi_list_put(&list, ssid, typed);
             const char *error = i < 0 ? "The list is full" : save_list();
-            screen_test(board, ssid, NET_STEPS, true, 0, &r, error ? error : "Saved: apps join it",
+            screen_test(board, ssid, NET_STEPS, true, 0, &r, error ? error : "Saved, and in use",
                         error ? CANVAS_RED : CANVAS_GREEN, board == 2 ? "SEQ PLAY OK" : "PLAY OK");
             canvas_send_all();
             do
                 next_press(0);
             while (!pressed(KEYS_PLAY | KEYS_REC));
-            *note = error ? error : "Saved: apps join it";
+            *note = error ? error : "Saved, and in use";
             return !error;
         }
         screen_test(board, ssid, r.step, true, why, &r, board == 2 ? "SEQ PLAY: save it anyway" : "PLAY: save it anyway",
@@ -396,7 +414,7 @@ static const char *network_page(unsigned index) {
             } else if (actions[at] == ACTION_USE) {
                 list.use = index;
                 const char *error = save_list();
-                note = error ? error : "Apps join it now";
+                note = error ? error : "In use now";
                 note_colour = error ? CANVAS_RED : CANVAS_GREEN;
             } else if (actions[at] == ACTION_PASSWORD) {
                 static char ssid[WIFI_SSID_MOST+1];

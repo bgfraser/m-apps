@@ -67,7 +67,7 @@ int main(int argc, char **argv) {
 #define SAVE(what) do { snprintf(name, sizeof name, "%u-%s", board, what); save(dir, name); } while (0)
         screen_list(&l, board, 0, 0, 0);
         SAVE("list-add");
-        screen_list(&l, board, 2, "Saved: apps join it", CANVAS_GREEN);
+        screen_list(&l, board, 2, "Saved, and in use", CANVAS_GREEN);
         SAVE("list-second");
         struct wifi_list empty;
         memset(&empty, 0, sizeof empty);
@@ -102,7 +102,7 @@ int main(int argc, char **argv) {
         }
         screen_test(board, "Home", NET_STEP_KEY, false, 0, &ok, "Testing", CANVAS_DIM, "");
         SAVE("test-running");
-        screen_test(board, "Home", NET_STEPS, true, 0, &ok, "Saved: apps join it", CANVAS_GREEN,
+        screen_test(board, "Home", NET_STEPS, true, 0, &ok, "Saved, and in use", CANVAS_GREEN,
                     board == 2 ? "SEQ PLAY OK" : "PLAY OK");
         SAVE("test-ok");
         screen_test(board, "Neighbours 5G", NET_STEP_JOINING, true, "Wrong password", &heard_only,

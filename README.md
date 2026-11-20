@@ -231,12 +231,12 @@ Started from the launcher on a unit with a card mod, it has repaired an FM-1 fro
 
 ### wifi
 
-Keeps the WiFi networks the card's apps join, in `/MBOOT/WIFI.TXT`, and tests them. It needs a card mod, and `picker` to start it: `make card` puts it in `/MBOOT/APPS/WIFI`. One file runs on both boards.
+Keeps the WiFi networks the unit joins, in `/WIFI.TXT` at the card's root, and tests them. The file is for any firmware or app on the unit, not only these: [docs/WIFI-TXT.md](docs/WIFI-TXT.md) is its format. The app needs a card mod, and `picker` to start it: `make card` puts it in `/MBOOT/APPS/WIFI`. One file runs on both boards.
 
 `WIFI.TXT` is meant to be edited on a computer too:
 
 ```
-# WiFi networks for the apps on this card. use= is the one they join.
+# WiFi networks on this card. use= is the one to join.
 use=Home
 
 ssid=Home
@@ -246,17 +246,18 @@ ssid=Cafe
 password=
 ```
 
-One setting a line: the value is everything after the first `=`, spaces and all. `ssid=` starts a network, `password=` is its password (none for an open one), and `use=` names the one to join, otherwise the first. Lines starting with `#`, blank lines and settings it doesn't know are skipped, and CRLF and a byte order mark are fine. Up to 12 networks; names of 1 to 32 bytes, passwords of 8 to 63 characters. The app writes the file the safe way (`fat_reserve`, `fat_write`, `fat_swap`), so comments added by hand aren't kept when it saves. `apps/wifi/wifilist.c` reads and writes it, and builds on a computer for its test.
+One setting a line: the value is everything after the first `=`, spaces and all. `ssid=` starts a network, `password=` is its password (none for an open one), and `use=` names the one to join, otherwise the first. Lines starting with `#`, blank lines and settings it doesn't know are skipped, and CRLF and a byte order mark are fine. Up to 12 networks; names of 1 to 32 bytes, passwords of 8 to 63 characters. When the app saves, it changes only what it means to: comments, blank lines, settings it doesn't know and networks it skipped stay as they were. It writes the file the safe way (`fat_reserve`, `fat_write`, `fat_swap`), and won't change one over 4 KiB. `apps/wifi/wifilist.c` reads and writes it, and builds on a computer for its test.
 
-- **The list** has `Add a network`, the networks, marking the one apps join, then `Back`. A network's page tests it, makes apps join it, changes its password, or deletes it (PLAY held 1.5 s). REC goes back.
+- **The list** has `Add a network`, the networks, marking the one to join, then `Back`. A network's page tests it, makes it the one to join, changes its password, or deletes it (PLAY held 1.5 s). REC goes back.
 - **Adding** listens on channels 1 to 13, about 2 s, and lists what it heard, strongest first, with the signal and channel. Choosing one asks for its password, on the piano keys: OCT- held for capitals, OCT+ for digits and symbols, both for the rest of printable ASCII. `Type a name` adds one that wasn't heard, or a hidden one. Then it tests it: joined, it's saved and made the one to use; not, it says why, and PLAY saves it anyway.
 - **A test** starts the radio, finds the network, makes the WPA2 key, joins, and asks DHCP for an address. Then it shows the address, signal, channel and time.
 - **What it joins:** WPA2-PSK (CCMP, without required management frame protection), which includes most routers set to WPA2/WPA3, and open networks. WPA3-only is listed, as one it can't join.
 - **The stack** is from [w0ts/fm1-base](https://github.com/w0ts/fm1-base): the radio's start-up and WiFi path from its felucca-bsp headers, and Optimist's WPA2 station, crypto and IP layer, in `apps/wifi/bsp/` and `apps/wifi/wifi_*.c`, unchanged but for one hook (`apps/wifi/bsp/README.md`). `net.c` joins and gets an address, after fm1-base's `device/wifi_own.c`. The radio's buffers are in the RAM below the app (`.dma`), which its DMA reaches.
 - **The key** is 4096 rounds of HMAC-SHA-1. The chip's SHA unit does each block (`sha1hw.c`, driven as JieLi's SDK does) once it's given what the software does on four blocks, and is 8.5 times faster: the key takes about 0.9 s.
 - **The clock:** started from the card at 360 MHz, it drops to 320 MHz, as the datasheet rates the chip, and goes back before returning. At 360 MHz with the radio on, the store experiment's crypto went wrong at times.
+- **Leaving** turns the radio off as it was found (`net_off()`): a launcher that got it back still on showed a black screen.
 
-Tested on both boards from `run-ram`, not yet from the card (where the 320 MHz switch applies): an open network gave an address in about 3 s, and a WPA2 one in 4 to 8 s with the signal at -50 to -62 dBm. `make build/any/wifi.app WIFI_TEST=-DWIFI_AUTOTEST` (after `touch apps/wifi/wifi.c`) builds a version that needs no keys: it scans, then tests every network in `WIFI.TXT`, all in its log.
+Tested on both boards from `run-ram`: an open network gave an address in about 3 s, and a WPA2 one in 4 to 8 s with the signal at -50 to -62 dBm. From the card's launcher on the FM-1 (at 360 MHz, so with the switch to 320): a scan, and the way back to the launcher. Joining from there hasn't been tried yet. `make build/any/wifi.app WIFI_TEST=-DWIFI_AUTOTEST` (after `touch apps/wifi/wifi.c`) builds a version that needs no keys: it scans, then tests every network in `WIFI.TXT`, all in its log.
 
 ## License
 
