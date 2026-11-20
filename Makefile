@@ -12,14 +12,23 @@ CFLAGS := -target pi32v2 -mcpu=r3 -std=c99 -Oz -ffreestanding -fno-builtin -fno-
 	-Wall -Wextra -Werror -flto -DRAM_STAGE -Ikit -I$(MB)/include
 # The drivers apps get from m-bootloader. --gc-sections drops what an app doesn't use.
 DRIVERS := core platform display board runtime usb_midi
-APPS := hello crashtest hangtest usbdisk slots tone mp3 jpeg
+APPS := hello crashtest hangtest usbdisk slots tone mp3 jpeg wifi
 # Built once more as universal apps, in build/any.
-UNIVERSAL_APPS := hello usbdisk slots mp3
+UNIVERSAL_APPS := hello usbdisk slots mp3 wifi
 # A stack for each app's C code. An app can override it: <name>_STACK := 0x8000
 APP_STACK_DEFAULT := 0x4000
 # The decoder keeps about 16 KiB on the stack, and speed matters more than size for it.
 mp3_STACK := 0x8000
 mp3_CFLAGS := -O2 -Iapps/mp3
+# WiFi: the radio's headers and Optimist's stack, from fm1-base (apps/wifi/bsp/README.md), in their own C. The key's
+# 4096 SHA-1 rounds and the crypto want speed.
+wifi_CFLAGS := -O2 -std=gnu99 -Iapps/wifi -Iapps/wifi/bsp -DWC_SHA1_HW=sha1_hw_block $(WIFI_TEST)
+# WIFI_TEST=-DWIFI_AUTOTEST builds the version that needs no keys. Its objects remember the flag they were built with,
+# so changing it rebuilds them.
+build/wifi-test.txt: FORCE
+	@mkdir -p build
+	@echo '$(WIFI_TEST)' | cmp -s - $@ || echo '$(WIFI_TEST)' > $@
+$(foreach b,fm1 smk37 any,$(patsubst apps/wifi/%.c,build/$(b)/wifi/%.o,$(wildcard apps/wifi/*.c))): build/wifi-test.txt
 # Kit files can have their own flags too: the shared look's drawing runs while sound has to keep time.
 kit_pixel_CFLAGS := -O2
 kit_canvas_CFLAGS := -O2
@@ -47,6 +56,8 @@ test:
 	python3 tests/mp3_ui_test.py
 	python3 tests/usbdisk_look_test.py
 	python3 tests/slots_screens_test.py
+	python3 tests/wifi_list_test.py
+	python3 tests/wifi_screens_test.py
 
 # make run APP=hello BOARD=fm1: start an app with run-ram, wait for it to end, and print its log.
 # make log BOARD=fm1: print the log an app left, however it was started.
@@ -87,7 +98,7 @@ $(eval $(call BOARD_template,any,,0))
 define APP_template
 build/$(2)/$(1)/%.o: apps/$(1)/%.c $$(wildcard apps/$(1)/*.h) kit/app.h kit/app_launch.h kit/log.h Makefile
 	@mkdir -p $$(@D)
-	$(CLANG) $(CFLAGS) $(3) -DAPP_BOARD=$(4) $$($(1)_CFLAGS) -c $$< -o $$@
+	$(CLANG) $(CFLAGS) $(3) -DAPP_BOARD=$(4) $$($(1)_CFLAGS) -MMD -MP -c $$< -o $$@
 build/$(2)/$(1)/app.ld: kit/app.ld.S Makefile
 	@mkdir -p $$(@D)
 	$(CLANG) -E -P -x c -DAPP_STACK=$$(or $$($(1)_STACK),$(APP_STACK_DEFAULT)) -DAPP_ORIGIN=$$(or $$($(1)_ORIGIN),0x1c30000) -DAPP_LENGTH=$$(or $$($(1)_LENGTH),0x4f000) -DAPP_LOW=$$(or $$($(1)_LOW),0x1c16800) $$< -o $$@
@@ -124,10 +135,11 @@ slots_LICENSES := LICENSES/OFL-1.1-Barlow.txt
 usbdisk_LICENSES := LICENSES/OFL-1.1-Barlow.txt
 picker_LICENSES := LICENSES/OFL-1.1-Barlow.txt
 unbrick_LICENSES := m-unbricker/web/LICENSES/DejaVu-fonts.txt
+wifi_LICENSES := LICENSES/Apache-2.0.txt LICENSES/OFL-1.1-Barlow.txt
 notice = sed 's|@SOURCE@|$(SOURCE)|' apps/$(1)/NOTICE.TXT > $(2); for l in $($(1)_LICENSES); do printf '\n' >> $(2); cat $$l >> $(2); done
 
 # make card BOARD=smk37: build/smk37/card/MBOOT, the launcher and these apps in their folders, to copy to a card.
-CARD_APPS := hello usbdisk slots tone mp3 unbrick
+CARD_APPS := hello usbdisk slots tone mp3 unbrick wifi
 card: build/$(BOARD)/MENU.BIN build/$(BOARD)/LAUNCH.BIN $(foreach a,$(CARD_APPS),build/$(BOARD)/$(a).app)
 	rm -rf build/$(BOARD)/card
 	mkdir -p build/$(BOARD)/card/MBOOT/APPS
@@ -157,3 +169,6 @@ release:
 	cd build/release && ls *.tar | LC_ALL=C sort | xargs sha256sum > SHA256SUMS
 
 .PHONY: all clean test run log card release
+
+# Each app object's headers, as the compiler found them (-MMD), so changing one rebuilds what includes it.
+-include $(wildcard build/*/*/*.d)

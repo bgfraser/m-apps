@@ -229,6 +229,36 @@ It's its own repo, here as the `m-unbricker` submodule, and its own Makefile bui
 
 Started from the launcher on a unit with a card mod, it has repaired an FM-1 from an SMK-37 Pro and an SMK-37 Pro from an FM-1.
 
+### wifi
+
+Keeps the WiFi networks the unit joins, in `/WIFI.TXT` at the card's root, and tests them. The file is for any firmware or app on the unit, not only these: [docs/WIFI-TXT.md](docs/WIFI-TXT.md) is its format. The app needs a card mod, and `picker` to start it: `make card` puts it in `/MBOOT/APPS/WIFI`. One file runs on both boards.
+
+`WIFI.TXT` is meant to be edited on a computer too:
+
+```
+# WiFi networks on this card. use= is the one to join.
+use=Home
+
+ssid=Home
+password=correct horse
+
+ssid=Cafe
+password=
+```
+
+One setting a line: the value is everything after the first `=`, spaces and all. `ssid=` starts a network, `password=` is its password (none for an open one), and `use=` names the one to join, otherwise the first. Lines starting with `#`, blank lines and settings it doesn't know are skipped, and CRLF and a byte order mark are fine. Up to 12 networks; names of 1 to 32 bytes, passwords of 8 to 63 characters. When the app saves, it changes only what it means to: comments, blank lines, settings it doesn't know and networks it skipped stay as they were. It writes the file the safe way (`fat_reserve`, `fat_write`, `fat_swap`), and won't change one over 4 KiB. `apps/wifi/wifilist.c` reads and writes it, and builds on a computer for its test.
+
+- **The list** has `Add a network`, the networks, marking the one to join, then `Back`. A network's page tests it, makes it the one to join, changes its password, or deletes it (PLAY held 1.5 s). REC goes back.
+- **Adding** listens on channels 1 to 13, about 2 s, and lists what it heard, strongest first, with the signal and channel. Choosing one asks for its password, on the piano keys: OCT- held for capitals, OCT+ for digits and symbols, both for the rest of printable ASCII. `Type a name` adds one that wasn't heard, or a hidden one. Then it tests it: joined, it's saved and made the one to use; not, it says why, and PLAY saves it anyway.
+- **A test** starts the radio, finds the network, makes the WPA2 key, joins, and asks DHCP for an address. Then it shows the address, signal, channel and time.
+- **What it joins:** WPA2-PSK (CCMP, without required management frame protection), which includes most routers set to WPA2/WPA3, and open networks. WPA3-only is listed, as one it can't join.
+- **The stack** is from [w0ts/fm1-base](https://github.com/w0ts/fm1-base): the radio's start-up and WiFi path from its felucca-bsp headers, and Optimist's WPA2 station, crypto and IP layer, in `apps/wifi/bsp/` and `apps/wifi/wifi_*.c`, cut down to what a station and the store need, and with one hook (`apps/wifi/bsp/README.md` says what changed). `net.c` joins and gets an address, after fm1-base's `device/wifi_own.c`. The radio's buffers are in the RAM below the app (`.dma`), which its DMA reaches.
+- **The key** is 4096 rounds of HMAC-SHA-1. The chip's SHA unit does each block (`sha1hw.c`, driven as JieLi's SDK does) once it's given what the software does on four blocks, and is 8.5 times faster: the key takes about 0.9 s.
+- **The clock:** started from the card at 360 MHz, it drops to 320 MHz, as the datasheet rates the chip, and goes back before returning. At 360 MHz with the radio on, the store experiment's crypto went wrong at times.
+- **Leaving** turns the radio off as it was found (`net_off()`): a launcher that got it back still on showed a black screen.
+
+Tested on both boards from `run-ram`: an open network gave an address in about 3 s, and a WPA2 one in 4 to 8 s with the signal at -50 to -62 dBm. From the card's launcher on the FM-1 (at 360 MHz, so with the switch to 320): a scan, and the way back to the launcher. Joining from there hasn't been tried yet. A name typed for a network not heard is asked for by name (a probe request), as a hidden network answers only that. `make build/any/wifi.app WIFI_TEST=-DWIFI_AUTOTEST` builds a version that needs no keys: it scans, then tests every network in `WIFI.TXT`, all in its log.
+
 ## License
 
 MIT, as m-bootloader is. See [LICENSE](LICENSE). Some parts have their own licences, and each file's header says which:
@@ -238,8 +268,9 @@ MIT, as m-bootloader is. See [LICENSE](LICENSE). Some parts have their own licen
 - `kit/keys.c` and `kit/keys.h` are MPL-2.0, from felucca-bsp's key tables (`boards/fm1/fm1_input.h` and `boards/smk37/fm1_input.h`).
 - `kit/textentry.c` and `kit/textentry.h` are MPL-2.0, adapted from Charles Vestal's [fm1-radio](https://github.com/charlesvestal/fm1-radio) password page.
 - `unbrick` is built from the `m-unbricker` submodule (MIT). It holds glyphs rendered from DejaVu Sans (Bitstream Vera licence and public domain), and its own list in `m-unbricker/THIRD-PARTY.md`.
+- `apps/wifi`'s radio and WiFi stack are from fm1-base and felucca-bsp: MPL-2.0, "GPL-3.0-only OR MPL-2.0" (taken here as MPL-2.0), and Apache-2.0 for three files from JieLi's SDK. `apps/wifi/net.c` is MPL-2.0, as it follows fm1-base's `wifi_own.c`. `apps/wifi/bsp/README.md` lists them.
 - `kit/font.h` is Barlow Semi Condensed, under the SIL Open Font License 1.1 (`LICENSES/OFL-1.1-Barlow.txt`), as 4-bit alpha made by fm1-base's `tools/gen_font.py`.
 
-The MPL-2.0 text is in `LICENSES/`, with the font's licence.
+The MPL-2.0 and Apache-2.0 texts are in `LICENSES/`, with the font's licence.
 
-**A built app carries its own notice.** An app with any of these in it has a `NOTICE.TXT` beside it on the card and in its release tar, as these licences ask of a copy given to someone: what's under which licence, by whom, a link to the source it was built from, and the font licences in full. `make card` writes it from `apps/<app>/NOTICE.TXT`, with `@SOURCE@` made the commit's (or tag's) address, then each file in `<app>_LICENSES` in the `Makefile`. The launcher's is `apps/picker/NOTICE.TXT`, in `/MBOOT`. Today these have one: `tone` and `mp3` (MPL-2.0 sound output; `mp3` also credits minimp3), `slots` (MPL-2.0 keys and typing, the Barlow font), `usbdisk` and the launcher (the Barlow font), and `unbrick` (the DejaVu glyphs). An app using none of them needs no notice: `hello`, `crashtest`, `hangtest` and `jpeg` are MIT throughout.
+**A built app carries its own notice.** An app with any of these in it has a `NOTICE.TXT` beside it on the card and in its release tar, as these licences ask of a copy given to someone: what's under which licence, by whom, a link to the source it was built from, and the font licences in full. `make card` writes it from `apps/<app>/NOTICE.TXT`, with `@SOURCE@` made the commit's (or tag's) address, then each file in `<app>_LICENSES` in the `Makefile`. The launcher's is `apps/picker/NOTICE.TXT`, in `/MBOOT`. Today these have one: `tone` and `mp3` (MPL-2.0 sound output; `mp3` also credits minimp3), `slots` (MPL-2.0 keys and typing, the Barlow font), `usbdisk` and the launcher (the Barlow font), `unbrick` (the DejaVu glyphs), and `wifi` (the MPL-2.0 and Apache-2.0 radio and WiFi stack, keys and typing, the Barlow font; the Apache-2.0 text in full). An app using none of them needs no notice: `hello`, `crashtest`, `hangtest` and `jpeg` are MIT throughout.

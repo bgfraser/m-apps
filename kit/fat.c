@@ -160,8 +160,9 @@ static void visit_folder(struct walk *w, const uint8_t *e) {
     }
 }
 
+/* A file of that name: never a folder or the volume's label, which fat_swap() and fat_remove() would wreck. */
 static void visit_name(struct walk *w, const uint8_t *e) {
-    if (!memcmp(e, w->match, 11)) {
+    if (!(e[11]&(FAT_ATTR_FOLDER|FAT_ATTR_LABEL)) && !memcmp(e, w->match, 11)) {
         w->found = entry_start(e);
         w->size = core_le32(e+28);
         w->is_found = true;
