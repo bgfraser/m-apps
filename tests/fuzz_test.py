@@ -140,7 +140,7 @@ def main():
     OUT.mkdir(parents=True, exist_ok=True)
     (OUT/'probe.c').write_text('#include <stddef.h>\n#include <stdint.h>\nint LLVMFuzzerTestOneInput(const uint8_t *d, size_t n) { return 0; }\n')
     if not shutil.which(CC) or subprocess.run([CC, *FLAGS, OUT/'probe.c', '-o', probe], capture_output=True).returncode:
-        print(f'fuzz: skipped, {CC} with libFuzzer not found')
+        print(f'fuzz: skipped, {CC} with libFuzzer not found (FUZZ_CC names another clang)')
         return
     failed = []
     for name in names:
