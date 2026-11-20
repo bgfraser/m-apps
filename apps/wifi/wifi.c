@@ -260,7 +260,7 @@ static const char *pass_ok(const char *s) {
 static const char *test_ssid;
 
 static void show_step(unsigned step) {
-    screen_test(board, test_ssid, step, false, 0, &(struct net_result){0}, "Testing", CANVAS_DIM, "");
+    screen_test(test_ssid, step, false, 0, &(struct net_result){0}, "Testing", CANVAS_DIM, "");
     canvas_send_all();
 }
 
@@ -275,6 +275,18 @@ static const char *test(const char *ssid, const char *pass, struct net_result *r
 
 /* ---- adding, and changing a password ---- */
 
+static const char *ok_keys(void) { return board == 2 ? "SEQ PLAY OK" : "PLAY OK"; }
+
+/* A test's result, shown until PLAY or REC. */
+static void show_result(const char *ssid, const char *why, const struct net_result *r, const char *bar_top,
+                        uint16_t bar_colour, const char *bar_keys) {
+    screen_test(ssid, r->step, true, why, r, bar_top, bar_colour, bar_keys);
+    canvas_send_all();
+    do
+        next_press(0);
+    while (!pressed(KEYS_PLAY | KEYS_REC));
+}
+
 /* The password typed for ssid, tested, and saved: true once saved. In typed: the password to start from. An open
  * network heard (ask false) has none to type. */
 static bool password_and_save(const char *ssid, bool ask, const char **note) {
@@ -287,21 +299,12 @@ static bool password_and_save(const char *ssid, bool ask, const char **note) {
         if (!why) {
             int i = wifi_list_put(&list, ssid, typed);
             const char *error = i < 0 ? "The list is full" : save_list();
-            screen_test(board, ssid, NET_STEPS, true, 0, &r, error ? error : "Saved, and in use",
-                        error ? CANVAS_RED : CANVAS_GREEN, board == 2 ? "SEQ PLAY OK" : "PLAY OK");
-            canvas_send_all();
-            do
-                next_press(0);
-            while (!pressed(KEYS_PLAY | KEYS_REC));
+            show_result(ssid, 0, &r, error ? error : "Saved, and in use", error ? CANVAS_RED : CANVAS_GREEN, ok_keys());
             *note = error ? error : "Saved, and in use";
             return !error;
         }
-        screen_test(board, ssid, r.step, true, why, &r, board == 2 ? "SEQ PLAY: save it anyway" : "PLAY: save it anyway",
-                    CANVAS_RED, ask ? (board == 2 ? "SEQ REC EDIT" : "REC EDIT") : (board == 2 ? "SEQ REC BACK" : "REC BACK"));
-        canvas_send_all();
-        do
-            next_press(0);
-        while (!pressed(KEYS_PLAY | KEYS_REC));
+        show_result(ssid, why, &r, board == 2 ? "SEQ PLAY: save it anyway" : "PLAY: save it anyway", CANVAS_RED,
+                    ask ? (board == 2 ? "SEQ REC EDIT" : "REC EDIT") : (board == 2 ? "SEQ REC BACK" : "REC BACK"));
         if (pressed(KEYS_PLAY)) {
             int i = wifi_list_put(&list, ssid, typed);
             const char *error = i < 0 ? "The list is full" : save_list();
@@ -430,12 +433,7 @@ static const char *network_page(unsigned index) {
             if (actions[at] == ACTION_TEST) {
                 struct net_result r;
                 const char *why = test(net->ssid, net->pass, &r);
-                screen_test(board, net->ssid, r.step, true, why, &r, why ? "Didn't join" : "It works",
-                            why ? CANVAS_RED : CANVAS_GREEN, board == 2 ? "SEQ PLAY OK" : "PLAY OK");
-                canvas_send_all();
-                do
-                    next_press(0);
-                while (!pressed(KEYS_PLAY | KEYS_REC));
+                show_result(net->ssid, why, &r, why ? "Didn't join" : "It works", why ? CANVAS_RED : CANVAS_GREEN, ok_keys());
             } else if (actions[at] == ACTION_USE) {
                 list.use = index;
                 const char *error = save_list();
@@ -500,7 +498,7 @@ int app_main(unsigned lsb_mhz) {
             const char *why = test(list.net[i].ssid, list.net[i].pass, &r);
             app_log("RESULT '%s': %s (step %u, %d dBm, ch %u, ip %08x, %u ms)", list.net[i].ssid, why ? why : "joined",
                     r.step, r.rssi, r.channel, (unsigned)r.ip, (unsigned)r.ms);
-            screen_test(board, list.net[i].ssid, r.step, true, why, &r, "Test", CANVAS_DIM, "");
+            screen_test(list.net[i].ssid, r.step, true, why, &r, "Test", CANVAS_DIM, "");
             canvas_send_all();
         }
         finish();

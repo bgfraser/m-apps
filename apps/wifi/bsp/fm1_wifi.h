@@ -13,10 +13,9 @@
  * coexistence controller's tables (fm1_wifi_wlc.h, 565 words to 0x14004), which made reception work.
  *
  *   fm1_wifi_up()                 the Wi-Fi side on (the radio started by BT first)
- *   fm1_wifi_is_up()              .. its RF path is on
  *   fm1_wifi_set_channel(ch)      1..13 (byte 0 of 0x1405C = channel + 101)
  *   fm1_wifi_rx(buf, max)         one received frame by the RX DMA: RXWI (16 B) then the 802.11 frame
- *   fm1_wifi_tx_prepare / _tx     one frame out by the TX DMA (a TXWI before it; _prepare_rate: at a rate, FM1_WIFI_RATE_*)
+ *   fm1_wifi_tx_prepare_rate / _tx  one frame out by the TX DMA (a TXWI before it, at a rate: FM1_WIFI_RATE_*)
  *   fm1_wifi_mac_rd / _wr         a MAC register; the key tables' places below (FM1_WIFI_WCID_* ...) */
 #pragma once
 #include <stdint.h>
@@ -67,11 +66,7 @@ FM1_INLINE void fm1_wifi_tx_prepare_rate(uint32_t *buf, uint32_t mpdu_len, uint3
 #define FM1_WIFI_RATE_CCK1 FM1_WIFI_TXWI(0, 0)   /* 0xB0: every frame until fm1-base's Wi-Fi tuning */
 #define FM1_WIFI_RATE_CCK2 FM1_WIFI_TXWI(0, 1)
 #define FM1_WIFI_RATE_OFDM6 FM1_WIFI_TXWI(1, 0)
-FM1_INLINE void fm1_wifi_tx_prepare(uint32_t *buf, uint32_t mpdu_len, uint32_t wcid, uint32_t ack)
-{
-    fm1_wifi_tx_prepare_rate(buf, mpdu_len, wcid, ack, FM1_WIFI_RATE_CCK1);
-}
-/* the frame fm1_wifi_tx_prepare set up, out; 0, or -1 if the DMA did not finish within 10 ms (one frame at a time) */
+/* the frame fm1_wifi_tx_prepare_rate set up, out; 0, or -1 if the DMA did not finish within 10 ms (one frame at a time) */
 FM1_INLINE int fm1_wifi_tx(uint32_t *buf)
 {
     volatile uint32_t *s = (volatile uint32_t *)(uintptr_t)FM1_WIFI_WDMA1;
@@ -111,20 +106,6 @@ FM1_INLINE uint32_t fm1_wifi_rd(uint32_t a) { return *(const volatile uint32_t *
  * MAC takes the ACK of its own frames itself: the host never needs them). Kept: other networks' frames (3 clear), multicast
  * (5 clear: Link's group), broadcast (6 clear: ARP, DHCP), BAR (15) */
 #define FM1_WIFI_RX_FILTER_STA 0x17F97u
-/* The MAC's own retries step down a rate each (TX_RTY_CFG 0x134C bit 30, TX_AUTO_FB_ENABLE: set in fm1_wifi_sta_init's
- * 0x47D01F0F; the retry limits [7:0] 15, [15:8] 31) by the legacy fallback tables, Ralink's LG_FBK_CFG0 (0x135C, nibble i:
- * where OFDM rate i goes, 8 + its index) and LG_FBK_CFG1 (0x1360, nibble i: where CCK rate i goes). JieLi's values with every
- * rate allowed (wl_usb_to_sdio.c wifi_set_tx_rate_control_tab: rate i to the next lower one allowed, the lowest to itself;
- * read-modify-write of the low 32 / 16 bits): CCK 2M retries at 1M; OFDM 6M at 6M (it never falls to CCK) */
-#define FM1_WIFI_LG_FBK0 0x135Cu
-#define FM1_WIFI_LG_FBK1 0x1360u
-#define FM1_WIFI_LG_FBK0_SDK 0xEDCBA988u
-#define FM1_WIFI_LG_FBK1_SDK 0x00002100u
-FM1_INLINE void fm1_wifi_fallback_sdk(void)
-{
-    fm1_wifi_mac_wr(FM1_WIFI_LG_FBK0, FM1_WIFI_LG_FBK0_SDK);
-    fm1_wifi_mac_wr(FM1_WIFI_LG_FBK1, (fm1_wifi_mac_rd(FM1_WIFI_LG_FBK1) & ~0xFFFFu) | FM1_WIFI_LG_FBK1_SDK);
-}
 /* The receiver's highest AGC gain: entry 44 of the BBP's window C ("cca"), JieLi's adj_agc_max_gain (wl_rf_common.a
  * wf_soft_adj.c: cca_reg_set(44, g), i.e. window C's three BBP writes) by the joined AP's signal: above -36 dBm 34, above -46 43,
  * above -60 51, above -76 57, else 66; 66 when nothing from the AP was heard for 220 ms (wl_hw_init.c WifiRecvPkgHook,
@@ -187,7 +168,6 @@ FM1_INLINE void fm1_wifi_up(void)
     for (i = 0; i < FM1_WLC_N; i++)
         *w = FM1_WLC_WORD(i);
 }
-FM1_INLINE int fm1_wifi_is_up(void) { return (fm1_wifi_rd(FM1_WL_EN) & FM1_WL_EN_WIFI) != 0u; }
 
 FM1_INLINE int fm1_wifi_dma_wait(uint32_t bit, uint32_t ticks)   /* 1: the bit came up within ticks (TIMER4) */
 {

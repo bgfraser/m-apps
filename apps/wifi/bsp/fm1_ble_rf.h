@@ -78,7 +78,7 @@
 #define FM1_RF_BURST_GROUPS (1u << 5)
 #define FM1_RF_BURST_MAX 32u              /* group 5 has 16 writes (§16.1: 14 + 2) */
 
-struct fm1_ble_rf_stat {                  /* what the start-up did, for the console (io/console.c 'bletrim') */
+struct fm1_ble_rf_stat {                  /* what the start-up did (the calibration reads its BBP timeouts) */
     uint32_t ops, bbp_timeouts, spi_timeouts, lut_words, trims, skipped, delay_us;
     uint32_t sections;                    /* bit g: §16.1 group g entered (section markers) */
     uint32_t scan_result;                 /* the last comparator word */
@@ -90,75 +90,17 @@ struct fm1_ble_rf_stat {                  /* what the start-up did, for the cons
 #define FM1_RF_SECT_BT   14u              /* the BT block (hal/fm1_ble.h fm1_ble_rf_init, HW §16.1 group 14) */
 #define FM1_RF_SECT_DONE 15u
 
-/* The BLE breadcrumb: kept in .noinit, so it survives a watchdog reset (not a power cycle). main.c moves it to
- * prev / prev_irqs at boot (fm1_ble_crumb_boot) and the console's 'dbg' prints both. now: bits [31:24] 0xB1 (the word
- * is valid), [23:16] the step of the BLUETOOTH ON path (FM1_BLE_STEP_*), [15:8] rf_ops / 256 at the last rf_init
- * group, [7:0] that group (§16.1). irqs: the BLE interrupts taken since that ON (a storm shows as a huge count).
- * op: rf_init's op count (rf_ops) when the last op began; gop: that op's index within its group (the group's marker
- * is 0; in a burst group, FM1_RF_BURST_GROUPS: op is the group's first op, gop the write, 1..rf_burst); addr: the last access begun, so a hang names it: a register's address, 0xBB0000 | BBP register << 8 | data
- * for a BBP transaction (port 0x3101C), 0x5B0000 | command << 8 | address for an RF-die SPI command (port 0x14028).
- * stop: the last link stop (hal/fm1_ble.h fm1_ble_link_stop through ble_hw_wl82.c hw_stop): 0x5D000000 | path << 16
- * (BDS_*) while it waits for the engine, 0x5E000000 | path << 16 | the microseconds it waited (at most 0xFFFF) once
- * done: a hang in that wait names it.
- * (New words go last: a reflash moves none of the older ones.) */
-enum {
-    FM1_BLE_STEP_NONE, FM1_BLE_STEP_SET_ON, FM1_BLE_STEP_STACK_INIT, FM1_BLE_STEP_RF_INIT, FM1_BLE_STEP_BB_INIT,
-    FM1_BLE_STEP_STARTED, FM1_BLE_STEP_ENABLE, FM1_BLE_STEP_LINK_STOP, FM1_BLE_STEP_LINK_OPEN, FM1_BLE_STEP_ADV_PROG,
-    FM1_BLE_STEP_ADV_STARTED, FM1_BLE_STEP_IRQS_ON, FM1_BLE_STEP_RUNNING, FM1_BLE_STEP_SET_OFF
-};
-static volatile struct {
-    uint32_t now, irqs, prev, prev_irqs;
-    uint32_t op, gop, addr, prev_op, prev_gop, prev_addr;
-    uint32_t stop, prev_stop;
-} fm1_ble_bc __attribute__((section(".noinit.ble")));
-#if defined(FELUCCA_DUAL) && FELUCCA_DUAL
-/* hal/fm1_dual.h fm1_dual_snap: where the BLE start-up / link was when an exception came (2026-10-15: CPU1 faults only
- * in BLE builds) */
-#define FM1_DUAL_SNAP_BLE 1
-static void fm1_dual_snap_ble(fm1_c1_snap_t *s)
-{
-    s->ble[0] = fm1_ble_bc.now;
-    s->ble[1] = fm1_ble_bc.irqs;
-    s->ble[2] = fm1_ble_bc.op;
-    s->ble[3] = fm1_ble_bc.gop;
-    s->ble[4] = fm1_ble_bc.addr;
-}
-#endif
-#define fm1_ble_crumb fm1_ble_bc.now
-#define fm1_ble_crumb_irqs fm1_ble_bc.irqs
-static uint32_t fm1_ble_step_at[16];         /* TIMER4 / 24000 (ms) when each step was first reached (0: not yet; the
-                                              * console's boot: against CPU1's start, 2026-10-15) */
-FM1_INLINE void fm1_ble_step(uint32_t step)
-{
-    fm1_ble_crumb = 0xB1000000u | (step & 0xFFu) << 16 | (fm1_ble_crumb & 0xFFFFu);
-    if (!fm1_ble_step_at[step & 15u])
-        fm1_ble_step_at[step & 15u] = 1u + fm1_ticks() / (1000u * FM1_TICKS_PER_US);
-}
-static void fm1_ble_crumb_boot(void)       /* at boot (main.c): what the last run left, then from zero */
-{
-    fm1_ble_bc.prev = fm1_ble_bc.now >> 24 == 0xB1u ? fm1_ble_bc.now : 0u;   /* (a power cycle: RAM noise -> 0) */
-    fm1_ble_bc.prev_irqs = fm1_ble_bc.prev ? fm1_ble_bc.irqs : 0u;
-    fm1_ble_bc.prev_op = fm1_ble_bc.prev ? fm1_ble_bc.op : 0u;
-    fm1_ble_bc.prev_gop = fm1_ble_bc.prev ? fm1_ble_bc.gop : 0u;
-    fm1_ble_bc.prev_addr = fm1_ble_bc.prev ? fm1_ble_bc.addr : 0u;
-    fm1_ble_bc.prev_stop = fm1_ble_bc.prev ? fm1_ble_bc.stop : 0u;
-    fm1_ble_bc.now = fm1_ble_bc.irqs = 0;
-    fm1_ble_bc.op = fm1_ble_bc.gop = fm1_ble_bc.addr = fm1_ble_bc.stop = 0;
-}
-
 static struct fm1_ble_rf_stat fm1_ble_rf_stat;
 static void fm1_ble_rf_section(uint32_t g)
 {
     fm1_ble_rf_stat.section = (uint8_t)g;
     fm1_ble_rf_stat.group_op = fm1_ble_rf_stat.ops;
-    fm1_ble_crumb = (fm1_ble_crumb & 0xFFFF0000u) | (fm1_ble_rf_stat.ops >> 8 & 0xFFu) << 8 | (g & 0xFFu);
     fm1_ble_rf_stat.sections |= 1u << (g & 31u);
 }
 
 static uint32_t fm1_bbp(uint32_t reg, uint32_t data, uint32_t rd)   /* one BBP transaction -> the port's [7:0] */
 {
     uint32_t c = BLE_RF_BBP_FLAGS | rd << 16 | reg << 8 | data, i;
-    fm1_ble_bc.addr = 0xBB0000u | (reg & 0xFFu) << 8 | (data & 0xFFu);
     FM1_BBP_PORT = c;
     FM1_BBP_PORT = c | 1u << 17;                            /* HW §5.2: the command, then with the start bit */
     for (i = 0; i < FM1_BBP_POLLS && (FM1_BBP_PORT & 1u << 17); i++)
@@ -185,7 +127,6 @@ static uint32_t fm1_bbp_win_rd(uint32_t w, uint32_t entry)   /* [I] that it retu
 static void fm1_rfspi(uint32_t addr, uint32_t cmd, uint32_t data)   /* HW §5.2: one RF-die SPI command */
 {
     uint32_t i;
-    fm1_ble_bc.addr = 0x5B0000u | (cmd & 0xFu) << 8 | (addr & 0xFFu);
     for (i = 0; i < FM1_RFSPI_POLLS && (FM1_RFSPI_CTL >> 20 & 7u); i++)
         FM1_RFSPI_WAIT = 0;
     if (i == FM1_RFSPI_POLLS)
@@ -212,8 +153,9 @@ static int fm1_rfc_scan_rc, fm1_rfc_trim_rc;
 
 /* The Wi-Fi IQ entries the replay writes last (RF-CALIBRATION.md §4.1: window D 0x04-0x09 the TX gains, phases and DCs,
  * 0x61 / 0x62 their low bits; D' 0x09-0x0C the RX gains and phases): the Wi-Fi PHY's alone (the BT side takes its compensation
- * from the record into 0x2FC08 / 0x2FC10 at the start, fm1_ble.h, and never reads these). Kept as written, so that
- * fm1_rf_cal_wifi_iq can put another record's fields in after the start, or these back. Keeping them changes no write */
+ * from the record into 0x2FC08 / 0x2FC10 at the start, fm1_ble.h, and never reads these). Kept as written, for
+ * fm1-base's fm1_rf_cal_wifi_iq to put another record's fields in after the start (m-apps doesn't). Keeping them changes
+ * no write */
 #define FM1_RFC_WIQ_N 12u
 static const uint8_t fm1_rfc_wiq_w[FM1_RFC_WIQ_N] = {2, 2, 2, 2, 2, 2, 2, 2, 3, 3, 3, 3};
 static const uint8_t fm1_rfc_wiq_e[FM1_RFC_WIQ_N] = {0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x61, 0x62, 0x09, 0x0A, 0x0B, 0x0C};
@@ -314,15 +256,13 @@ static uint32_t fm1_rf_field(uint32_t v, uint32_t f, const uint8_t *const rec[4]
 
 static uint32_t fm1_rf_u32(const uint8_t *p) { return p[0] | p[1] << 8 | (uint32_t)p[2] << 16 | (uint32_t)p[3] << 24; }
 
-/* the burst's writes, from RAM: no flash fetch, no flash data (a and v are on the caller's stack, fm1_ble_bc is RAM)
+/* the burst's writes, from RAM: no flash fetch, no flash data (a and v are on the caller's stack)
  * between the first write and the last. tools/build.py checks it links into .ram_text. */
 __attribute__((section(".ram_text"), noinline, used))
 static void fm1_rf_burst_run(const uint32_t *a, const uint32_t *v, uint32_t n)
 {
     uint32_t i;
     for (i = 0; i < n; i++) {
-        fm1_ble_bc.gop = i + 1u;
-        fm1_ble_bc.addr = a[i];
         FM1_RF_REG(a[i]) = v[i];
     }
 }
@@ -359,7 +299,6 @@ static uint32_t fm1_ble_rf_burst(uint32_t pc, uint32_t end, const uint8_t *const
     }
     if (nt)
         return pc;                                          /* a trim field for an op outside the group */
-    fm1_ble_bc.op = fm1_ble_rf_stat.ops + 1u;
     ie = fm1_icfg() & 0x200u;
     fm1_irq_off();
     run(a, v, n);
@@ -371,12 +310,10 @@ static uint32_t fm1_ble_rf_burst(uint32_t pc, uint32_t end, const uint8_t *const
     return q;
 }
 
-/* one op more for the console and the breadcrumb (each write of a packed op counts as the op it replaced) */
+/* one op more, counted (each write of a packed op counts as the op it replaced) */
 static void fm1_ble_rf_tick(void)
 {
     fm1_ble_rf_stat.ops++;
-    fm1_ble_bc.op = fm1_ble_rf_stat.ops;
-    fm1_ble_bc.gop = fm1_ble_rf_stat.ops - fm1_ble_rf_stat.group_op;
 }
 
 /* the packed ops (capture format 3, tools/ble_rf_pack.py), write for write the format-2 ops they replace:
@@ -425,7 +362,6 @@ static void fm1_ble_rf_exec(uint32_t pc, uint32_t end, const uint8_t *const rec[
         if (op < 0x80u) {                                   /* a register write */
             a = ble_rf_addr[op];
             v = fm1_rf_u32(p + pc + 1);
-            fm1_ble_bc.addr = a;
             if (a == FM1_WL_A00)
                 v = (v & ~(1u << 14)) | (FM1_RF_REG(a) & 1u << 14);
             if (fm1_rf_cal_on && fm1_rfc_is187(trim, nt)) {
@@ -531,24 +467,4 @@ static void fm1_ble_rf_run(const uint8_t *x106, const uint8_t *x107, const uint8
                                                              * rx_tx_cal_attenuation(0)); the replay's words are a
                                                              * start without a trim (measured against the SDK build) */
     fm1_ble_rf_stat.ran = 1;
-}
-
-/* After the start (fm1-base's Wi-Fi tuning, its stored calibration): the Wi-Fi IQ entries kept above again, with the TX
- * gains, phases and DCs (record bytes 0-23) and the RX gains and phases (26-29) of x187, as JieLi's quick_start_wifi_trim
- * puts a stored record's in (RF-CALIBRATION.md §4.5: each through fm1_rf_cal_win, 0x62's bits 7-4 the replay's); x187 0:
- * the replay's own values back. Only the entries the replay wrote; the TX LO, the RX DC, the filter codes, the RF-die
- * table and the BT trims stay as the start left them. -> the entries written (0: the replay wrote none, nothing done) */
-static uint32_t fm1_rf_cal_wifi_iq(const uint8_t *x187)
-{
-    uint32_t k, n = 0, v;
-    for (k = 0; k < FM1_RFC_WIQ_N; k++) {
-        if (!(fm1_rfc_wiq_mask >> k & 1u))
-            continue;
-        v = fm1_rfc_wiq[k];
-        if (x187)
-            v = fm1_rf_cal_win(fm1_rfc_wiq_w[k], fm1_rfc_wiq_e[k], v, x187);
-        fm1_bbp_win_wr(fm1_rfc_wiq_w[k], fm1_rfc_wiq_e[k], v);
-        n++;
-    }
-    return n;
 }

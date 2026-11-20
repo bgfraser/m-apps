@@ -22,8 +22,7 @@ mp3_STACK := 0x8000
 mp3_CFLAGS := -O2 -Iapps/mp3
 # WiFi: the radio's headers and Optimist's stack, from fm1-base (apps/wifi/bsp/README.md), in their own C. The key's
 # 4096 SHA-1 rounds and the crypto want speed.
-wifi_CFLAGS := -O2 -std=gnu99 -Iapps/wifi -Iapps/wifi/bsp -Wno-unused-function -Wno-unused-variable -Wno-unused-parameter \
-	-Wno-sign-compare -Wno-undefined-internal -include string.h -DWC_SHA1_HW=sha1_hw_block $(WIFI_TEST)
+wifi_CFLAGS := -O2 -std=gnu99 -Iapps/wifi -Iapps/wifi/bsp -DWC_SHA1_HW=sha1_hw_block $(WIFI_TEST)
 # WIFI_TEST=-DWIFI_AUTOTEST builds the version that needs no keys. Its objects remember the flag they were built with,
 # so changing it rebuilds them.
 build/wifi-test.txt: FORCE
@@ -99,7 +98,7 @@ $(eval $(call BOARD_template,any,,0))
 define APP_template
 build/$(2)/$(1)/%.o: apps/$(1)/%.c $$(wildcard apps/$(1)/*.h) kit/app.h kit/app_launch.h kit/log.h Makefile
 	@mkdir -p $$(@D)
-	$(CLANG) $(CFLAGS) $(3) -DAPP_BOARD=$(4) $$($(1)_CFLAGS) -c $$< -o $$@
+	$(CLANG) $(CFLAGS) $(3) -DAPP_BOARD=$(4) $$($(1)_CFLAGS) -MMD -MP -c $$< -o $$@
 build/$(2)/$(1)/app.ld: kit/app.ld.S Makefile
 	@mkdir -p $$(@D)
 	$(CLANG) -E -P -x c -DAPP_STACK=$$(or $$($(1)_STACK),$(APP_STACK_DEFAULT)) -DAPP_ORIGIN=$$(or $$($(1)_ORIGIN),0x1c30000) -DAPP_LENGTH=$$(or $$($(1)_LENGTH),0x4f000) -DAPP_LOW=$$(or $$($(1)_LOW),0x1c16800) $$< -o $$@
@@ -170,3 +169,6 @@ release:
 	cd build/release && ls *.tar | LC_ALL=C sort | xargs sha256sum > SHA256SUMS
 
 .PHONY: all clean test run log card release
+
+# Each app object's headers, as the compiler found them (-MMD), so changing one rebuilds what includes it.
+-include $(wildcard build/*/*/*.d)

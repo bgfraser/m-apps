@@ -46,7 +46,6 @@ struct wifi_sta {
 };
 
 void wifi_sta_init(struct wifi_sta *sta, const uint8_t sta_mac[6], void (*rand)(uint8_t *out, uint8_t n));
-void wifi_sta_set_creds(struct wifi_sta *sta, const char *pass, const uint8_t *ssid, uint32_t ssid_len);
 void wifi_sta_set_pmk(struct wifi_sta *sta, const uint8_t pmk[32], const uint8_t *ssid, uint32_t ssid_len);   /* a saved key */
 void wifi_sta_set_ap(struct wifi_sta *sta, const uint8_t bssid[6]);
 void wifi_sta_derive_ptk(const uint8_t pmk[32], const uint8_t spa[6], const uint8_t aa[6],
@@ -80,11 +79,6 @@ uint32_t wifi_sta_encap_eapol(struct wifi_sta *sta, const uint8_t *eapol, uint32
 /* Processes an incoming 802.11 frame (Auth Resp, Assoc Resp, or EAPOL Data). If an EAPOL response
  * (M2/M4 wrapped in 802.11 Data + LLC/SNAP) is produced, returns 1 and sets tx_len; returns 0 if consumed, -1 on error. */
 int wifi_sta_rx_frame(struct wifi_sta *sta, const uint8_t *frame, uint32_t len, uint8_t *tx_buf, uint32_t *tx_len);
-
-/* The station's MAC from VM record 102 (the BT address the stock firmware keeps at 0x0E9000: its first 10 bytes, read by
- * the caller; 0 = none), with the locally-administered bit (bit 1 of byte 0) set. Falls back to 02:11:22:33:44:55 if
- * absent or damaged. Returns 1 if from the record, 0 if fallback. */
-int wifi_sta_get_mac(const uint8_t *vm, uint8_t mac[6]);
 
 /* Programs Station MAC (0x1008/0x100C), Target BSSID (0x1010/0x1014), and Radio Channel (0x1405C). */
 void wifi_sta_set_mac_regs(const uint8_t sta_mac[6], const uint8_t bssid[6], uint32_t channel);

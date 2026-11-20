@@ -1,11 +1,9 @@
 /* SPDX-License-Identifier: GPL-3.0-only OR MPL-2.0 */
 /* Copyright (C) 2026 Henri David (hdavid), Optimist (github.com/w0ts/optimist) */
-/* The small IP layer (wifi_ip.h). From Optimist's wifi/wifi_ip.c. */
+/* The small IP layer (wifi_ip.h). From Optimist's wifi/wifi_ip.c, the station's side only. */
 #include "wifi_ip.h"
 
-#ifndef __PI32V2__
-#include <string.h>                      /* (the firmware's: felucca-bsp's libc.c, in the unity) */
-#endif
+#include <string.h>
 
 static inline void wip_write_u16_be(uint8_t *p, uint16_t v)
 {
@@ -98,30 +96,6 @@ void wifi_ip_init(struct wifi_ip *wip, const uint8_t sta_mac[6], const uint8_t b
     wip->dhcp_state = WIFI_IP_DHCP_IDLE;
 }
 
-void wifi_ip_ap_init(struct wifi_ip *wip, const uint8_t ap_mac[6], uint32_t ip, void (*rand_fn)(uint8_t *out, uint8_t n))
-{
-    wifi_ip_init(wip, ap_mac, ap_mac, rand_fn);
-    wip->ap = 1;
-    wip->ip = ip;
-    wip->netmask = 0xFFFFFF00u;
-    wip->dhcp_state = WIFI_IP_DHCP_BOUND;           /* (no client to run: the address is ours) */
-    wip->igmp_t = (int64_t)1 << 62;                 /* (no membership reports: we are the router) */
-}
-
-void wifi_ip_ibss_init(struct wifi_ip *wip, const uint8_t mac[6], const uint8_t bssid[6], uint32_t ip, void (*rand_fn)(uint8_t *out, uint8_t n))
-{
-    wifi_ip_ap_init(wip, mac, ip, rand_fn);
-    memcpy(wip->bssid, bssid, 6);
-    wip->netmask = 0xFFFF0000u;
-    wip->ap = WIFI_IP_IBSS;
-}
-
-void wifi_ip_arp_learn(struct wifi_ip *wip, uint32_t ip, const uint8_t mac[6])
-{
-    if (wip)
-        arp_cache_insert(wip, ip, mac);
-}
-
 int wifi_ip_bound(const struct wifi_ip *wip, uint16_t port)
 {
     uint32_t i;
@@ -152,15 +126,6 @@ void wifi_ip_unbind(struct wifi_ip *wip, uint16_t port)
     for (i = 0; wip && i < WIFI_IP_PORTS; i++)
         if (wip->ports[i] == port)
             wip->ports[i] = 0;
-}
-
-void wifi_ip_join(struct wifi_ip *wip, uint32_t group)
-{
-    if (!wip)
-        return;
-    wip->group = group;
-    if (!wip->ap)
-        wip->igmp_t = 0;                            /* (the report at the next poll once bound) */
 }
 
 int wifi_ip_early_filter(const struct wifi_ip *wip, const uint8_t *frame, uint32_t len)
@@ -211,14 +176,6 @@ int wifi_ip_early_filter(const struct wifi_ip *wip, const uint8_t *frame, uint32
             return 0;
         proto = ip_pkt[9];
 
-        /* IGMP (Protocol 2) */
-        if (proto == 2u)
-            return 1;
-
-        /* ICMP echo request to our address (MODE AP answers a ping) */
-        if (proto == 1u)
-            return (our_ip != 0 && wip_read_u32_be(ip_pkt + 16) == our_ip);
-
         /* UDP (Protocol 17) */
         if (proto == 17u) {
             uint32_t ihl = (ip_pkt[0] & 0x0Fu) * 4u;
@@ -228,13 +185,12 @@ int wifi_ip_early_filter(const struct wifi_ip *wip, const uint8_t *frame, uint32
             dport = wip_read_u16_be(udp + 2);
             dst_ip = wip_read_u32_be(ip_pkt + 16);
 
-            /* DHCP Client (Port 68), and the DHCP server's (67: only an access point acts on it) */
-            if (dport == WIFI_IP_DHCP_PORT_CLIENT || dport == WIFI_IP_DHCP_PORT_SERVER)
+            /* DHCP Client (Port 68) */
+            if (dport == WIFI_IP_DHCP_PORT_CLIENT)
                 return 1;
 
-            /* a bound port: to us, broadcast, or to the group joined */
-            if (wifi_ip_bound(wip, dport) &&
-                (dst_ip == our_ip || our_ip == 0 || dst_ip == 0xFFFFFFFFu || (wip->group && dst_ip == wip->group)))
+            /* a bound port: to us, or broadcast */
+            if (wifi_ip_bound(wip, dport) && (dst_ip == our_ip || our_ip == 0 || dst_ip == 0xFFFFFFFFu))
                 return 1;
         }
     }
@@ -248,29 +204,15 @@ static uint32_t build_80211_data_hdr(struct wifi_ip *wip, const uint8_t da[6], u
     memset(tx_buf, 0, 32);
     tx_buf[0] = 0x08;                               /* Type: Data, Subtype: Data */
     tx_buf[2] = 0x00; tx_buf[3] = 0x00;             /* Duration */
-    if (wip->ap == WIFI_IP_IBSS) {                  /* MODE JAM: neither ToDS nor FromDS: RA = DA, TA = us, addr3 = the group's BSSID */
-        memcpy(tx_buf + 4, da, 6);
-        memcpy(tx_buf + 10, wip->mac, 6);
-        memcpy(tx_buf + 16, wip->bssid, 6);
-    } else if (wip->ap) {                           /* MODE AP: FromDS, RA = DA, TA = BSSID = us, addr3 = SA = us */
-        tx_buf[1] = (uint8_t)(0x02u | (wip->protect ? 0x40u : 0u));
-        memcpy(tx_buf + 4, da, 6);
-        memcpy(tx_buf + 10, wip->mac, 6);
-        memcpy(tx_buf + 16, wip->mac, 6);
-    } else {
-        tx_buf[1] = (uint8_t)(0x01u | (wip->protect ? 0x40u : 0u));   /* ToDS = 1, FromDS = 0; Protected once keys are in */
-        memcpy(tx_buf + 4, wip->bssid, 6);          /* Addr 1: RA (AP BSSID) */
-        memcpy(tx_buf + 10, wip->mac, 6);           /* Addr 2: TA/SA (Our Station MAC) */
-        memcpy(tx_buf + 16, da, 6);                 /* Addr 3: DA (Destination MAC) */
-    }
+    tx_buf[1] = (uint8_t)(0x01u | (wip->protect ? 0x40u : 0u));   /* ToDS = 1, FromDS = 0; Protected once keys are in */
+    memcpy(tx_buf + 4, wip->bssid, 6);              /* Addr 1: RA (AP BSSID) */
+    memcpy(tx_buf + 10, wip->mac, 6);               /* Addr 2: TA/SA (Our Station MAC) */
+    memcpy(tx_buf + 16, da, 6);                     /* Addr 3: DA (Destination MAC) */
     tx_buf[22] = (uint8_t)(seq << 4);
     tx_buf[23] = (uint8_t)(seq >> 4);
 
-    /* try15: hardware CCMP the standard Ralink way (vendor SDK TXWI_STRUC). Software hands the MAC ONLY the plaintext
-     * 802.11 frame (24-byte header + LLC/SNAP + payload); it reserves no inline IV/EIV. The CCMP IV/EIV are TXWI words
-     * 3/4 (left 0 so the MAC fills the PN) and encryption is driven by the WCID key table, not by any TXWI flag. The
-     * CCMP is now applied in software (wl_send -> wc_ccmp_encrypt) before the frame is injected; the TXWI just carries
-     * the full length. This builder only sets the Protected bit so the AP knows to decrypt. */
+    /* The MAC encrypts (CCMP) a frame with the Protected bit, by the WCID's key in its table: it's handed the plaintext
+     * 802.11 frame, with no room for the CCMP header, which the MAC adds. */
 
     /* LLC/SNAP Header (8 bytes): plaintext the MAC encrypts */
     tx_buf[24] = 0xAA;
@@ -284,25 +226,14 @@ static uint32_t build_80211_data_hdr(struct wifi_ip *wip, const uint8_t da[6], u
     return 32u;
 }
 
-static int get_dst_mac(const struct wifi_ip *wip, uint32_t dst_ip, uint8_t dst_mac[6])   /* 0: not known (AP: nothing to send to) */
+static int get_dst_mac(const struct wifi_ip *wip, uint32_t dst_ip, uint8_t dst_mac[6])
 {
     if (dst_ip == 0xFFFFFFFFu) {
         memset(dst_mac, 0xFF, 6);
         return 1;
     }
-    if ((dst_ip & 0xF0000000u) == 0xE0000000u) {   /* Multicast: 01:00:5E:[low 23 bits] */
-        dst_mac[0] = 0x01;
-        dst_mac[1] = 0x00;
-        dst_mac[2] = 0x5E;
-        dst_mac[3] = (uint8_t)((dst_ip >> 16) & 0x7Fu);
-        dst_mac[4] = (uint8_t)((dst_ip >> 8) & 0xFFu);
-        dst_mac[5] = (uint8_t)(dst_ip & 0xFFu);
-        return 1;
-    }
     if (arp_lookup(wip, dst_ip, dst_mac))
         return 1;
-    if (wip->ap)
-        return 0;                                   /* (the AP has no router to hand an unknown address to) */
     if (wip->gw && arp_lookup(wip, wip->gw, dst_mac))
         return 1;
     /* Fallback: AP BSSID */
@@ -326,7 +257,7 @@ static uint32_t build_udp(struct wifi_ip *wip, const uint8_t dst_mac[6], uint32_
     wip_write_u16_be(ip_hdr + 2, ip_len);
     wip_write_u16_be(ip_hdr + 4, wip->tx_seq);      /* Identification */
     wip_write_u16_be(ip_hdr + 6, 0x4000u);          /* Flags: DF */
-    ip_hdr[8] = ((dst_ip & 0xF0000000u) == 0xE0000000u) ? 1u : 64u; /* TTL: 1 for mcast, 64 for ucast */
+    ip_hdr[8] = 64u;                                /* TTL */
     ip_hdr[9] = 17u;                                /* Protocol: UDP */
     wip_write_u32_be(ip_hdr + 12, wip->ip);         /* Source IP */
     wip_write_u32_be(ip_hdr + 16, dst_ip);          /* Destination IP */
@@ -354,48 +285,6 @@ uint32_t wifi_ip_send_udp(struct wifi_ip *wip, uint16_t src_port, uint32_t dst_i
     if (!get_dst_mac(wip, dst_ip, dst_mac))
         return 0;
     return build_udp(wip, dst_mac, dst_ip, src_port, dst_port, payload, payload_len, tx_buf);
-}
-
-uint32_t wifi_ip_reply_udp(struct wifi_ip *wip, const uint8_t dst_mac[6], uint32_t dst_ip, uint16_t src_port, uint16_t dst_port, const uint8_t *payload, uint32_t payload_len, uint8_t *tx_buf)
-{
-    if (!wip || !dst_mac || !tx_buf)
-        return 0;
-    return build_udp(wip, dst_mac, dst_ip, src_port, dst_port, payload, payload_len, tx_buf);
-}
-
-uint32_t wifi_ip_igmp_join(struct wifi_ip *wip, uint32_t group_ip, uint8_t *tx_buf)
-{
-    uint8_t dst_mac[6];
-    uint32_t off;
-    uint8_t *ip_hdr, *igmp;
-
-    if (!wip || !tx_buf)
-        return 0;
-
-    get_dst_mac(wip, group_ip, dst_mac);
-    off = build_80211_data_hdr(wip, dst_mac, 0x0800u, tx_buf);
-
-    ip_hdr = tx_buf + off;
-    memset(ip_hdr, 0, 20);
-    ip_hdr[0] = 0x45;                               /* IPv4, IHL 5 */
-    ip_hdr[1] = 0x00;
-    wip_write_u16_be(ip_hdr + 2, 28u);              /* Total length: 20 + 8 */
-    wip_write_u16_be(ip_hdr + 4, wip->tx_seq);
-    wip_write_u16_be(ip_hdr + 6, 0x4000u);          /* DF */
-    ip_hdr[8] = 1u;                                 /* TTL = 1 */
-    ip_hdr[9] = 2u;                                 /* Protocol: IGMP */
-    wip_write_u32_be(ip_hdr + 12, wip->ip);         /* Source IP */
-    wip_write_u32_be(ip_hdr + 16, group_ip);        /* Destination IP */
-    wip_write_u16_be(ip_hdr + 10, ip_chksum(ip_hdr, 20));
-
-    igmp = ip_hdr + 20;
-    igmp[0] = 0x16;                                 /* Type: IGMPv2 Membership Report */
-    igmp[1] = 0x00;                                 /* Max Response Time */
-    igmp[2] = 0x00; igmp[3] = 0x00;                 /* Checksum placeholder */
-    wip_write_u32_be(igmp + 4, group_ip);
-    wip_write_u16_be(igmp + 2, ip_chksum(igmp, 8));
-
-    return off + 20u + 8u;
 }
 
 static uint32_t build_dhcp_msg(struct wifi_ip *wip, uint8_t msg_type, uint32_t req_ip, uint32_t srv_ip, uint8_t *tx_buf)
@@ -566,33 +455,6 @@ int wifi_ip_rx_frame(struct wifi_ip *wip, const uint8_t *frame, uint32_t len, in
         if (len < hlen + 8u + ihl || ip_tot_len < ihl)
             return -1;
 
-        /* MODE AP: a ping to our address is answered (the quickest check of the whole path from a laptop) */
-        if (wip->ap && proto == 1u && wip_read_u32_be(ip_hdr + 16) == wip->ip && tx_buf && tx_len) {
-            const uint8_t *icmp = ip_hdr + ihl;
-            uint32_t n = ip_tot_len - ihl, off;
-            uint8_t *o;
-            if (n < 8u || n > 512u || icmp[0] != 8u || len < hlen + 8u + ihl + n)
-                return 0;
-            off = build_80211_data_hdr(wip, frame + 10, 0x0800u, tx_buf);   /* (the sender's address: ToDS addr2) */
-            o = tx_buf + off;
-            memset(o, 0, 20);
-            o[0] = 0x45;
-            wip_write_u16_be(o + 2, (uint16_t)(20u + n));
-            wip_write_u16_be(o + 4, wip->tx_seq);
-            wip_write_u16_be(o + 6, 0x4000u);
-            o[8] = 64u;
-            o[9] = 1u;
-            wip_write_u32_be(o + 12, wip->ip);
-            wip_write_u32_be(o + 16, src_ip);
-            wip_write_u16_be(o + 10, ip_chksum(o, 20));
-            memcpy(o + 20, icmp, n);
-            o[20] = 0u;                                 /* echo reply */
-            o[22] = o[23] = 0;
-            wip_write_u16_be(o + 22, ip_chksum(o + 20, n));
-            *tx_len = off + 20u + n;
-            return 1;
-        }
-
         /* UDP Dispatch */
         if (proto == 17u) {
             const uint8_t *udp = ip_hdr + ihl;
@@ -611,15 +473,6 @@ int wifi_ip_rx_frame(struct wifi_ip *wip, const uint8_t *frame, uint32_t len, in
                 return -1;
             payload = udp + 8;
             payload_len = (uint32_t)udp_len - 8u;
-
-            /* MODE AP: a client's DHCP request (port 67) goes to the server */
-            if (wip->ap && dst_port == WIFI_IP_DHCP_PORT_SERVER) {
-                if (wip->udp_srv && tx_buf && tx_len) {
-                    *tx_len = wip->udp_srv(wip, frame + 10, payload, payload_len, tx_buf);
-                    return *tx_len ? 1 : 0;
-                }
-                return 0;
-            }
 
             /* DHCP Response (Port 68) */
             if (dst_port == WIFI_IP_DHCP_PORT_CLIENT && payload_len >= 240u) {
@@ -676,16 +529,6 @@ int wifi_ip_rx_frame(struct wifi_ip *wip, const uint8_t *frame, uint32_t len, in
                     wip->gw = gw;
                     wip->dns = dns;
                     wip->dhcp_state = WIFI_IP_DHCP_BOUND;
-                    wip->igmp_t = now_us + 30000000;      /* (the join below; then every 30 s, wifi_ip_poll) */
-
-                    if (wip->on_addr)
-                        wip->on_addr(wip->ctx, wip->ip);
-
-                    /* the group's membership report */
-                    if (wip->group && tx_buf && tx_len) {
-                        *tx_len = wifi_ip_igmp_join(wip, wip->group, tx_buf);
-                        return 1;
-                    }
                     return 0;
                 }
                 return 0;
@@ -719,10 +562,6 @@ uint32_t wifi_ip_poll(struct wifi_ip *wip, int64_t now_us, uint8_t *tx_buf)
         }
         wip->dhcp_state = WIFI_IP_DHCP_DISCOVERING;
         return build_dhcp_msg(wip, 1, 0, 0, tx_buf);
-    }
-    if (wip->dhcp_state == WIFI_IP_DHCP_BOUND && wip->group && !wip->ap && now_us >= wip->igmp_t) {
-        wip->igmp_t = now_us + 30000000;                /* (a switch that snoops forgets a group nobody reports) */
-        return wifi_ip_igmp_join(wip, wip->group, tx_buf);
     }
     return 0;
 }

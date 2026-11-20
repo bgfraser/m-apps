@@ -346,9 +346,8 @@ static char *put_ip(char *out, uint32_t ip) {
     return out;
 }
 
-void screen_test(unsigned board, const char *ssid, unsigned step, bool done, const char *why, const struct net_result *r,
+void screen_test(const char *ssid, unsigned step, bool done, const char *why, const struct net_result *r,
                  const char *bar_top, uint16_t bar_colour, const char *bar_keys) {
-    (void)board;
     header(ssid, "");
     canvas_card(12, 40, N-24, 152, 14, false);
     for (unsigned i = 0; i < NET_STEPS; ++i) {

@@ -61,15 +61,17 @@ static void rand_bytes(uint8_t *out, uint8_t n) {
 static struct { unsigned frames, data, ours, ip, sent, send_errors; } count;
 
 static uint8_t *frame_out(void) { return (uint8_t *)txb+FM1_WIFI_TX_HDR; }
-static void send(uint32_t len) {
+/* The frame at frame_out(), len bytes, out at 1 Mb/s; ack: the MAC waits for the receiver's ACK, and retries. */
+static void transmit(uint32_t len, uint32_t ack) {
     if (!len)
         return;
-    fm1_wifi_tx_prepare_rate(txb, len, 1u, 1u, FM1_WIFI_RATE_CCK1);
+    fm1_wifi_tx_prepare_rate(txb, len, 1u, ack, FM1_WIFI_RATE_CCK1);
     if (fm1_wifi_tx(txb) == 0)
         ++count.sent;
     else
         ++count.send_errors;
 }
+static void send(uint32_t len) { transmit(len, 1u); }
 
 /* Up to max frames waiting, each to f as its 802.11 frame, without the radio's header. */
 static void receive(void (*f)(const uint8_t *, uint32_t, int8_t), unsigned max) {
@@ -334,12 +336,7 @@ static void probe(const char *ssid, unsigned n) {
     memcpy(b+at, ssid, n);
     at += n;
     memcpy(b+at, rates, sizeof rates);
-    at += sizeof rates;
-    fm1_wifi_tx_prepare_rate(txb, at, 1u, 0u, FM1_WIFI_RATE_CCK1);
-    if (fm1_wifi_tx(txb) == 0)
-        ++count.sent;
-    else
-        ++count.send_errors;
+    transmit(at+sizeof rates, 0u);
 }
 
 /* Sends a request until the state moves on from state, a few times. */
@@ -463,7 +460,6 @@ const char *net_join(const char *ssid, const char *pass, void (*status)(unsigned
     fm1_wifi_mac_wr(FM1_WIFI_RX_FILTER, FM1_WIFI_RX_FILTER_STA);
     at(NET_STEP_ADDRESS);
     wifi_ip_init(&ip, mac, found.bssid, rand_bytes);
-    ip.send = send;
     ip.protect = open_net ? 0 : 1;
     memset(&count, 0, sizeof count);
     send(wifi_ip_dhcp_start(&ip, frame_out()));

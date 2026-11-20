@@ -30,6 +30,6 @@ void screen_type(unsigned board, const char *title, const char *network, const c
                  unsigned layer, uint32_t held, bool cursor, const char *note);
 
 /* A test: the network, the step it's on (NET_STEPS when done), and then why it failed, or 0 if it joined. */
-void screen_test(unsigned board, const char *ssid, unsigned step, bool done, const char *why, const struct net_result *r,
+void screen_test(const char *ssid, unsigned step, bool done, const char *why, const struct net_result *r,
                  const char *bar_top, uint16_t bar_colour, const char *bar_keys);
 #endif

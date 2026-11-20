@@ -2,24 +2,10 @@
 /* Copyright (C) 2026 Henri David (hdavid), Optimist (github.com/w0ts/optimist) */
 /* WPA2-PSK Station (IEEE 802.11i / 802.11-2020 §12.7): PTK derivation, 4-way handshake
  * state machine (EAPOL-Key M1-M4), GTK unwrapping, 802.11 Auth/Assoc framing, LLC/SNAP
- * EAPOL encapsulation, MAC address discovery, and MAC key table installation. */
+ * EAPOL encapsulation, and MAC key table installation. */
 #include "wifi_sta.h"
 #include "fm1_wifi.h"                    /* felucca-bsp's (the host's tests: tests/wifi/fake/fm1_wifi.h) */
-#ifndef __PI32V2__
-#include <string.h>                      /* (the firmware's memcpy, memset, memcmp: felucca-bsp's libc.c, in the unity) */
-#endif
-
-static uint32_t wst_crc16(const uint8_t *p, uint32_t n)   /* CRC-16/XMODEM (poly 0x1021, init 0): the VM record's */
-{
-    uint32_t crc = 0, k;
-    while (n--) {
-        crc ^= (uint32_t)*p++ << 8;
-        for (k = 0; k < 8u; k++)
-            crc = crc & 0x8000u ? (crc << 1) ^ 0x1021u : crc << 1;
-        crc &= 0xFFFFu;
-    }
-    return crc;
-}
+#include <string.h>
 
 /* Standard WPA2-PSK RSN Information Element for Station (22 bytes) */
 static const uint8_t sta_rsn_ie[22] = {
@@ -41,17 +27,6 @@ void wifi_sta_init(struct wifi_sta *sta, const uint8_t sta_mac[6], void (*rand)(
     sta->state = WIFI_STA_STATE_IDLE;
     sta->rand = rand;
 }
-
-#ifndef __PI32V2__
-void wifi_sta_set_creds(struct wifi_sta *sta, const char *pass, const uint8_t *ssid, uint32_t ssid_len)
-{
-    if (ssid_len > WIFI_STA_SSID_MAX)
-        ssid_len = WIFI_STA_SSID_MAX;
-    memcpy(sta->ssid, ssid, ssid_len);
-    sta->ssid_len = ssid_len;
-    wc_pmk(pass, ssid, ssid_len, sta->pmk);
-}
-#endif
 
 void wifi_sta_set_pmk(struct wifi_sta *sta, const uint8_t pmk[32], const uint8_t *ssid, uint32_t ssid_len)
 {
@@ -538,24 +513,6 @@ int wifi_sta_rx_frame(struct wifi_sta *sta, const uint8_t *frame, uint32_t len, 
         }
         return res;
     }
-}
-
-int wifi_sta_get_mac(const uint8_t *vm, uint8_t mac[6])
-{
-    if (vm && vm[1] == 0x66 && (vm[2] & 0x0Fu) == 0 && (vm[2] >> 4) == 6 && vm[3] == 0 &&
-        (wst_crc16(vm + 4, 6) & 0xFFu) == vm[0]) {
-        memcpy(mac, vm + 4, 6);
-        mac[0] |= 0x02;                             /* locally administered bit */
-        return 1;
-    }
-    /* Fallback MAC address */
-    mac[0] = 0x02;
-    mac[1] = 0x11;
-    mac[2] = 0x22;
-    mac[3] = 0x33;
-    mac[4] = 0x44;
-    mac[5] = 0x55;
-    return 0;
 }
 
 void wifi_sta_set_mac_regs(const uint8_t sta_mac[6], const uint8_t bssid[6], uint32_t channel)

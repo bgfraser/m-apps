@@ -100,20 +100,20 @@ int main(int argc, char **argv) {
                         layer == 2 ? 1u << 3 : 0, true, layer == 3 ? "At least 8 characters" : 0);
             SAVE(what);
         }
-        screen_test(board, "Home", NET_STEP_KEY, false, 0, &ok, "Testing", CANVAS_DIM, "");
+        screen_test("Home", NET_STEP_KEY, false, 0, &ok, "Testing", CANVAS_DIM, "");
         SAVE("test-running");
-        screen_test(board, "Home", NET_STEPS, true, 0, &ok, "Saved, and in use", CANVAS_GREEN,
+        screen_test("Home", NET_STEPS, true, 0, &ok, "Saved, and in use", CANVAS_GREEN,
                     board == 2 ? "SEQ PLAY OK" : "PLAY OK");
         SAVE("test-ok");
-        screen_test(board, "Neighbours 5G", NET_STEP_JOINING, true, "Wrong password", &heard_only,
+        screen_test("Neighbours 5G", NET_STEP_JOINING, true, "Wrong password", &heard_only,
                     board == 2 ? "SEQ PLAY: save it anyway" : "PLAY: save it anyway", CANVAS_RED,
                     board == 2 ? "SEQ REC EDIT" : "REC EDIT");
         SAVE("test-failed");
         screen_type(board, "Network name", 0, "My hidden network", 0, TEXT_LOWER, 0, false, 0);
         SAVE("type-name");
-        screen_test(board, "Workshop with a name too long to fit", NET_STEP_FINDING, false, 0, &ok, "Testing", CANVAS_DIM, "");
+        screen_test("Workshop with a name too long to fit", NET_STEP_FINDING, false, 0, &ok, "Testing", CANVAS_DIM, "");
         SAVE("test-long-name");
-        screen_test(board, "Far away", NET_STEP_FINDING, true, "Not heard here", &(struct net_result){0}, "", CANVAS_DIM,
+        screen_test("Far away", NET_STEP_FINDING, true, "Not heard here", &(struct net_result){0}, "", CANVAS_DIM,
                     "");
         SAVE("test-not-heard");
     }
