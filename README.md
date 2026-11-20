@@ -27,8 +27,8 @@ make TOOLCHAIN=/path/to/toolchain
 This makes `build/fm1/hello.app` and `build/smk37/hello.app`. The apps use m-bootloader's drivers, which come in as the `m-bootloader` submodule.
 
 `make release` makes what a release carries, in `build/release`. The on-device store installs from these:
-- **`<app>-<board>.tar`:** an app's folder for `/MBOOT/APPS/<APP>/`, such as `mp3-smk37.tar` with `BOOT.APP`, `META.TXT` and `ICON.QOI`.
-- **`mboot-<board>.tar`:** `MENU.BIN` and `LAUNCH.BIN` for `/MBOOT`.
+- **`<app>-<board>.tar`:** an app's folder for `/MBOOT/APPS/<APP>/`, such as `mp3-smk37.tar` with `BOOT.APP`, `META.TXT`, `ICON.QOI` and `NOTICE.TXT` (see [License](#license)).
+- **`mboot-<board>.tar`:** `MENU.BIN`, `LAUNCH.BIN` and the launcher's `NOTICE.TXT` for `/MBOOT`.
 - **`SHA256SUMS`.**
 
 Each tar is plain ustar, made by `tools/app_tar.py`. Every name is 8.3 in capitals, as the kit's card code writes them, and the same files always make the same bytes. CI builds and tests every push, and a `v*` tag publishes a release with these files.
@@ -122,10 +122,11 @@ Each app has a folder of its own in `/MBOOT/APPS`, as the Homebrew Channel has t
 /MBOOT/APPS/MP3/BOOT.APP
 /MBOOT/APPS/MP3/ICON.QOI
 /MBOOT/APPS/MP3/META.TXT
+/MBOOT/APPS/MP3/NOTICE.TXT     its licences, if it has code or a font under another licence
 /MBOOT/APPS/MP3/...            the app's own files
 ```
 
-`make card BOARD=smk37` (or `fm1`) builds all of that in `build/smk37/card/MBOOT`, for these apps: hello, usbdisk, slots, tone and mp3. Copy it to the card's root.
+`make card BOARD=smk37` (or `fm1`) builds all of that in `build/smk37/card/MBOOT`, for these apps: hello, usbdisk, slots, tone, mp3 and unbrick. Copy it to the card's root.
 
 `META.TXT` is plain text, lines of `key=value`, and every line is optional:
 
@@ -237,4 +238,8 @@ MIT, as m-bootloader is. See [LICENSE](LICENSE). Some parts have their own licen
 - `kit/keys.c` and `kit/keys.h` are MPL-2.0, from felucca-bsp's key tables (`boards/fm1/fm1_input.h` and `boards/smk37/fm1_input.h`).
 - `kit/textentry.c` and `kit/textentry.h` are MPL-2.0, adapted from Charles Vestal's [fm1-radio](https://github.com/charlesvestal/fm1-radio) password page.
 - `unbrick` is built from the `m-unbricker` submodule (MIT). It holds glyphs rendered from DejaVu Sans (Bitstream Vera licence and public domain), and its own list in `m-unbricker/THIRD-PARTY.md`.
-- `kit/font.h` is Barlow Semi Condensed, under the SIL Open Font License 1.1 (`kit/Barlow-OFL.txt`), as 4-bit alpha made by fm1-base's `tools/gen_font.py`.
+- `kit/font.h` is Barlow Semi Condensed, under the SIL Open Font License 1.1 (`LICENSES/OFL-1.1-Barlow.txt`), as 4-bit alpha made by fm1-base's `tools/gen_font.py`.
+
+The MPL-2.0 text is in `LICENSES/`, with the font's licence.
+
+**A built app carries its own notice.** An app with any of these in it has a `NOTICE.TXT` beside it on the card and in its release tar, as these licences ask of a copy given to someone: what's under which licence, by whom, a link to the source it was built from, and the font licences in full. `make card` writes it from `apps/<app>/NOTICE.TXT`, with `@SOURCE@` made the commit's (or tag's) address, then each file in `<app>_LICENSES` in the `Makefile`. The launcher's is `apps/picker/NOTICE.TXT`, in `/MBOOT`. Today these have one: `tone` and `mp3` (MPL-2.0 sound output; `mp3` also credits minimp3), `slots` (MPL-2.0 keys and typing, the Barlow font), `usbdisk` and the launcher (the Barlow font), and `unbrick` (the DejaVu glyphs). An app using none of them needs no notice: `hello`, `crashtest`, `hangtest` and `jpeg` are MIT throughout.

@@ -1,0 +1,7 @@
+M-Unbricker, from m-apps (https://github.com/jvitkauskas/m-apps), its m-unbricker
+submodule (https://github.com/jvitkauskas/m-unbricker).
+This file was built from @SOURCE@
+
+It is MIT, Copyright (c) 2026 Julius Vitkauskas (LICENSE in the source).
+
+The text is drawn with glyphs rendered from DejaVu Sans, under the licence below.
