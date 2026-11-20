@@ -161,6 +161,16 @@ Lists the MP3 files in the card's root, plays the one you choose, and shows the 
 
 `apps/tone` is a smaller start: two tones, with the real sample rate in its log.
 
+### jpeg
+
+A test of the chip's JPEG decoder (`JL_JPG` at `0x41900`): it decodes five pictures built into it, shows each, and logs how long the decoder took. `apps/jpeg/jpeg_hw.c` drives it, polled. The register sequence was worked out from how JieLi's AC79 SDK drives it, and the code is written fresh. Its header says what the decoder takes.
+
+- **What it decodes:** baseline JPEG with three components, 4:2:0, 4:2:2 or 4:4:4, a width that's a multiple of 16 (8 for 4:4:4). One row of MCUs per start, into planar Y, Cb and Cr. Not handled: restart markers, a file bigger than RAM, progressive and greyscale (the hardware can't do those).
+- **Speed** on the FM-1 from `run-ram` (CPU 96 MHz): 240 x 240 in 1.5 ms (4:2:0), 2.0 ms (4:2:2) and 2.8 ms (4:4:4), and 480 x 320 4:2:0 in 3.7 ms. Turning that into RGB for the screen, one line at a time in C, took about 170 ms, so that's the part to speed up.
+- **The pictures** are drawn by `apps/jpeg/images.py`, which writes `images.h`. With a second argument it also saves the JPEGs, to compare a decode with on a computer: a build with `jpeg_CFLAGS=-DDUMP=n` leaves picture n's planes in RAM. For 4:4:4 they came within 3 levels of Pillow's.
+
+It's a test for now, not on the card.
+
 ### slots
 
 Keeps firmware and its settings on the card, and swaps between them with no computer. It needs a card mod, and `picker` to start it: `make card` puts it in `/MBOOT/APPS/SLOTS`.
