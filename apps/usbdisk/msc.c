@@ -4,6 +4,7 @@
 #include "msc.h"
 #include "app.h"
 #include "card.h"
+#include <string.h>
 #define CON0 0x11800u
 #define CON1 0x11804u
 #define EP_COUNT(n) (0x11808u+4u*(n))
@@ -33,21 +34,16 @@ static const uint8_t config_descriptor[32] = {
     7, 5, EP_OUT, 2, PACKET, 0, 0
 };
 static const uint8_t language_string[4] = { 4, 3, 0x09, 0x04 };
-#if APP_BOARD == 2
-#define PRODUCT "SMK-37 USB DISK"
-#else
-#define PRODUCT "FM-1 USB DISK"
-#endif
-static const char product[] = PRODUCT;
+/* The names a computer shows, by the board it's on. */
+static const char *product(void) {
+    return app_board() == 2 ? "SMK-37 USB DISK" : "FM-1 USB DISK";
+}
 static const char serial[] = "000000000001";
-static const uint8_t inquiry[36] = {
+/* The product's 16 bytes go in when it starts. */
+static uint8_t inquiry[36] = {
     0, 0x80, 0x02, 0x02, 31, 0, 0, 0,
     'M', '-', 'A', 'P', 'P', 'S', ' ', ' ',
-#if APP_BOARD == 2
-    'S', 'M', 'K', '-', '3', '7', ' ', 'U', 'S', 'B', ' ', 'D', 'I', 'S', 'K', ' ',
-#else
-    'F', 'M', '-', '1', ' ', 'U', 'S', 'B', ' ', 'D', 'I', 'S', 'K', ' ', ' ', ' ',
-#endif
+    ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ',
     '1', '.', '0', ' '
 };
 
@@ -207,7 +203,7 @@ static const uint8_t *descriptor(uint32_t value, uint32_t *size) {
             return language_string;
         }
         if ((value&255) == 1)
-            return string(product, size);
+            return string(product(), size);
         if ((value&255) == 2)
             return string(serial, size);
         return 0;
@@ -809,6 +805,10 @@ const struct msc_stats *msc_stats(void) {
 
 void msc_start(uint32_t sectors) {
     total_sectors = sectors;
+    const char *name = product();
+    size_t n = strlen(name);
+    for (size_t i = 0; i < 16; ++i)
+        inquiry[16+i] = (uint8_t)(i < n ? name[i] : ' ');
     REG(CON0) = 0;
     REG(CON1) = 0;
     REG(IO_CON0) = 0x0c;

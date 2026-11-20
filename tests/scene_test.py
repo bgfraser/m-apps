@@ -31,7 +31,7 @@ with tempfile.TemporaryDirectory() as folder:
     folder = Path(folder)
     host = folder/'host'
     subprocess.run([os.environ.get('HOSTCC', 'cc'), '-std=c11', '-g', '-Wall', '-Wextra', '-Werror',
-                    '-fsanitize=address,undefined', f'-I{ROOT}/apps/picker', ROOT/'tests/scene_host.c',
+                    '-fsanitize=address,undefined', f'-I{ROOT}/apps/picker', f'-I{ROOT}/kit', ROOT/'tests/scene_host.c',
                     ROOT/'apps/picker/scene.c', ROOT/'apps/picker/qoi.c', '-o', host], check=True)
     icons = []
     for seed in (3, 5):

@@ -13,11 +13,16 @@ CFLAGS := -target pi32v2 -mcpu=r3 -std=c99 -Oz -ffreestanding -fno-builtin -fno-
 # The drivers apps get from m-bootloader. --gc-sections drops what an app doesn't use.
 DRIVERS := core platform display board runtime usb_midi
 APPS := hello crashtest hangtest usbdisk slots tone mp3 jpeg
+# Built once more as universal apps, in build/any.
+UNIVERSAL_APPS := hello usbdisk slots mp3
 # A stack for each app's C code. An app can override it: <name>_STACK := 0x8000
 APP_STACK_DEFAULT := 0x4000
 # The decoder keeps about 16 KiB on the stack, and speed matters more than size for it.
 mp3_STACK := 0x8000
 mp3_CFLAGS := -O2 -Iapps/mp3
+# Kit files can have their own flags too: the shared look's drawing runs while sound has to keep time.
+kit_pixel_CFLAGS := -O2
+kit_canvas_CFLAGS := -O2
 # The card's MENU.BIN loads the launcher, in the 32 KiB stage 2 has (m-bootloader's docs/SPEC.md §11.5). The launcher
 # runs from 0x01C0A800, with the 48 KiB below 0x01C16800, which an app that returns leaves alone (§11.8).
 menu_ORIGIN := 0x1c28000
@@ -27,7 +32,7 @@ picker_ORIGIN := 0x1c0a800
 picker_LENGTH := 0xc000
 picker_STACK := 0x2000
 
-all: $(foreach a,$(APPS) unbrick,build/fm1/$(a).app build/smk37/$(a).app) build/fm1/logread.bin build/smk37/logread.bin build/fm1/MENU.BIN build/smk37/MENU.BIN build/fm1/LAUNCH.BIN build/smk37/LAUNCH.BIN
+all: $(foreach a,$(APPS) unbrick,build/fm1/$(a).app build/smk37/$(a).app) $(foreach a,$(UNIVERSAL_APPS) unbrick,build/any/$(a).app) build/any/MENU.BIN build/any/LAUNCH.BIN build/fm1/logread.bin build/smk37/logread.bin build/fm1/MENU.BIN build/smk37/MENU.BIN build/fm1/LAUNCH.BIN build/smk37/LAUNCH.BIN
 
 clean:
 	rm -rf build
@@ -39,6 +44,9 @@ test:
 	python3 tests/fat_write_test.py
 	python3 tests/slots_test.py
 	python3 tests/app_tar_test.py
+	python3 tests/mp3_ui_test.py
+	python3 tests/usbdisk_look_test.py
+	python3 tests/slots_screens_test.py
 
 # make run APP=hello BOARD=fm1: start an app with run-ram, wait for it to end, and print its log.
 # make log BOARD=fm1: print the log an app left, however it was started.
@@ -55,9 +63,9 @@ define BOARD_template
 build/$(1)/drv/%.o: $(MB)/src/%.c Makefile
 	@mkdir -p $$(@D)
 	$(CLANG) $(CFLAGS) $(2) -DAPP_BOARD=$(3) -c $$< -o $$@
-build/$(1)/kit/%.o: kit/%.c kit/app.h kit/app_launch.h kit/audio.h kit/card.h kit/fat.h kit/load.h kit/log.h Makefile
+build/$(1)/kit/%.o: kit/%.c kit/app.h kit/app_launch.h kit/audio.h kit/card.h kit/fat.h kit/load.h kit/log.h kit/pixel.h kit/pixel_font.h kit/canvas.h kit/font.h kit/keys.h kit/textentry.h Makefile
 	@mkdir -p $$(@D)
-	$(CLANG) $(CFLAGS) $(2) -DAPP_BOARD=$(3) -c $$< -o $$@
+	$(CLANG) $(CFLAGS) $(2) -DAPP_BOARD=$(3) -c $$< -o $$@ $$(kit_$$*_CFLAGS)
 build/$(1)/kit/start.o: kit/start.S Makefile
 	@mkdir -p $$(@D)
 	$(CLANG) -target pi32v2 -mcpu=r3 -c $$< -o $$@
@@ -72,6 +80,8 @@ build/$(1)/logread.bin: build/$(1)/logread.elf
 endef
 $(eval $(call BOARD_template,fm1,,1))
 $(eval $(call BOARD_template,smk37,-DBOARD_SMK,2))
+# Universal apps: one file for both boards, board 0 in its trailer, finding out which it's on with app_board().
+$(eval $(call BOARD_template,any,,0))
 
 # app, board, its -D flag, its number, its name for the trailer
 define APP_template
@@ -81,7 +91,7 @@ build/$(2)/$(1)/%.o: apps/$(1)/%.c $$(wildcard apps/$(1)/*.h) kit/app.h kit/app_
 build/$(2)/$(1)/app.ld: kit/app.ld.S Makefile
 	@mkdir -p $$(@D)
 	$(CLANG) -E -P -x c -DAPP_STACK=$$(or $$($(1)_STACK),$(APP_STACK_DEFAULT)) -DAPP_ORIGIN=$$(or $$($(1)_ORIGIN),0x1c30000) -DAPP_LENGTH=$$(or $$($(1)_LENGTH),0x4f000) -DAPP_LOW=$$(or $$($(1)_LOW),0x1c16800) $$< -o $$@
-build/$(2)/$(1).elf: $$(patsubst apps/$(1)/%.c,build/$(2)/$(1)/%.o,$$(wildcard apps/$(1)/*.c)) build/$(2)/kit/app.o build/$(2)/kit/audio.o build/$(2)/kit/card.o build/$(2)/kit/fat.o build/$(2)/kit/load.o build/$(2)/kit/log.o build/$(2)/kit/start.o $$(addprefix build/$(2)/drv/,$$(addsuffix .o,$(DRIVERS))) build/$(2)/$(1)/app.ld
+build/$(2)/$(1).elf: $$(patsubst apps/$(1)/%.c,build/$(2)/$(1)/%.o,$$(wildcard apps/$(1)/*.c)) build/$(2)/kit/app.o build/$(2)/kit/audio.o build/$(2)/kit/card.o build/$(2)/kit/fat.o build/$(2)/kit/canvas.o build/$(2)/kit/keys.o build/$(2)/kit/load.o build/$(2)/kit/log.o build/$(2)/kit/pixel.o build/$(2)/kit/start.o build/$(2)/kit/textentry.o $$(addprefix build/$(2)/drv/,$$(addsuffix .o,$(DRIVERS))) build/$(2)/$(1)/app.ld
 	$(LINK) --plugin-opt=O3 --relax --gc-sections -T build/$(2)/$(1)/app.ld -Map build/$(2)/$(1).map -o $$@ $$(filter %.o,$$^)
 build/$(2)/$(1).app: build/$(2)/$(1).elf $(MB)/tools/stage2.py
 	$(OBJCOPY) -O binary -j .text $$< build/$(2)/$(1).raw
@@ -89,6 +99,7 @@ build/$(2)/$(1).app: build/$(2)/$(1).elf $(MB)/tools/stage2.py
 endef
 $(foreach a,$(APPS) menu picker,$(eval $(call APP_template,$(a),fm1,,1)))
 $(foreach a,$(APPS) menu picker,$(eval $(call APP_template,$(a),smk37,-DBOARD_SMK,2)))
+$(foreach a,$(UNIVERSAL_APPS) menu picker,$(eval $(call APP_template,$(a),any,,0)))
 
 build/%/MENU.BIN: build/%/menu.elf $(MB)/tools/stage2.py
 	$(OBJCOPY) -O binary -j .text $< build/$*/menu.raw

@@ -86,7 +86,7 @@ static uint32_t write_data(const char *path, uint32_t *size) {
     return start;
 }
 
-/* image, cut after this many writes or -1, then: mkdir PATH | new PATH NAME FILE | swap PATH NAME FILE | remove PATH NAME
+/* image, cut after this many writes or -1, then: mkdir PATH | new PATH NAME FILE | newlong PATH NAME LONG FILE | swap PATH NAME FILE | remove PATH NAME
  * | reserve BYTES */
 int main(int argc, char **argv) {
     if (argc < 4)
@@ -110,6 +110,11 @@ int main(int argc, char **argv) {
         pad(name, argv[5]);
         uint32_t start = write_data(argv[6], &size);
         check(fat_add(dir, name, FAT_ATTR_ARCHIVE, start, size));
+    } else if (!strcmp(op, "newlong")) {
+        uint32_t size, dir = folder(argv[4], false);
+        pad(name, argv[5]);
+        uint32_t start = write_data(argv[7], &size);
+        check(fat_add_named(dir, name, argv[6], FAT_ATTR_ARCHIVE, start, size));
     } else if (!strcmp(op, "swap")) {
         uint32_t size, dir = folder(argv[4], false);
         pad(name, argv[5]);

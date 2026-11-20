@@ -13,6 +13,7 @@
 #define NOT_FAT32 "CARD IS NOT FAT32"
 #define BAD_FOLDER "BAD FOLDER ON CARD"
 #define WRITE_ERROR "CARD WRITE ERROR"
+#define BAD_NAME "NAME NOT ALLOWED"
 #define CARD_FULL "CARD IS FULL"
 #define FSINFO_SIGNATURE 0x41615252u
 #define FSINFO_SIGNATURE2 0x61417272u
@@ -135,7 +136,7 @@ static uint16_t long_units[LONG_PIECE*MOST_LONG_PIECES+1];
 
 struct walk {
     const char *match;
-    uint32_t found, size, sector;
+    uint32_t found, size, sector, previous;
     unsigned at;
     bool is_found;
     struct fat_entry *entries;
@@ -312,6 +313,7 @@ static const char *walk(uint32_t c, void (*visit)(struct walk *, const uint8_t *
         return BAD_FOLDER;
     for (;;) {
         for (unsigned s = 0; s < per_cluster; ++s) {
+            w->previous = w->sector;
             w->sector = data_at+(c-2)*per_cluster+s;
             if (!card_read(w->sector, block))
                 return READ_ERROR;
@@ -553,28 +555,64 @@ static const char *blank_cluster(uint32_t c) {
     return 0;
 }
 
-const char *fat_add(uint32_t directory, const char name[11], unsigned attributes, uint32_t start, uint32_t size) {
+/* Entries to add: up to FAT_LONG_PIECES long-name pieces, then the short entry. */
+#define MOST_ADDED (FAT_LONG_PIECES+1u)
+static uint8_t added[MOST_ADDED*ENTRY];
+
+/* Writes n entries from added into one directory sector, so one write makes them all appear at once. They go in a run
+ * of free entries in a sector; or, where the directory ends without room, at the start of the next sector, or of a
+ * new cluster, before the old end's free entries are marked deleted so the directory goes on to them. */
+static const char *add_entries(uint32_t directory, unsigned n) {
     if (!cluster_ok(directory))
         return BAD_FOLDER;
-    uint32_t c = directory, seen = 0;
+    uint32_t c = directory, seen = 0, end_sector = 0;
+    unsigned end_at = 0;
     for (;;) {
         app_feed();
         for (unsigned s = 0; s < per_cluster; ++s) {
             uint32_t sector = data_at+(c-2)*per_cluster+s;
+            if (end_sector) {
+                /* Past the end, whatever is here was never part of the directory. */
+                memset(block, 0, SECTOR);
+                memcpy(block, added, n*ENTRY);
+                if (!card_write(sector, block))
+                    return WRITE_ERROR;
+                if (!card_read(end_sector, block))
+                    return READ_ERROR;
+                for (unsigned at = end_at; at < SECTOR; at += ENTRY)
+                    block[at] = 0xe5;
+                return card_write(end_sector, block) ? 0:WRITE_ERROR;
+            }
             if (!card_read(sector, block))
                 return READ_ERROR;
+            unsigned run = 0;
             for (unsigned at = 0; at < SECTOR; at += ENTRY) {
                 /* As walk() does, so a chain that loops ends with an error, and its FAT stays as it is. */
                 if (++seen > MOST_ENTRIES)
                     return BAD_FOLDER;
-                if (block[at] && block[at] != 0xe5)
+                if (block[at] && block[at] != 0xe5) {
+                    run = 0;
                     continue;
-                /* A zero entry ends the directory, so what follows it may never have been looked at. */
+                }
                 bool was_end = !block[at];
-                put_entry(block+at, name, attributes, start, size);
-                if (was_end && at+ENTRY < SECTOR)
-                    memset(block+at+ENTRY, 0, SECTOR-at-ENTRY);
-                return card_write(sector, block) ? 0:WRITE_ERROR;
+                unsigned first = at-run*ENTRY;
+                if (was_end) {
+                    /* A zero entry ends the directory: all after it is free, though what follows in this sector may
+                     * never have been written. */
+                    if (first+n*ENTRY > SECTOR) {
+                        end_sector = sector;
+                        end_at = at;
+                        break;
+                    }
+                    memcpy(block+first, added, n*ENTRY);
+                    if (first+n*ENTRY < SECTOR)
+                        memset(block+first+n*ENTRY, 0, SECTOR-first-n*ENTRY);
+                    return card_write(sector, block) ? 0:WRITE_ERROR;
+                }
+                if (++run == n) {
+                    memcpy(block+first, added, n*ENTRY);
+                    return card_write(sector, block) ? 0:WRITE_ERROR;
+                }
             }
         }
         uint32_t following = next(c);
@@ -586,7 +624,8 @@ const char *fat_add(uint32_t directory, const char name[11], unsigned attributes
             return BAD_FOLDER;
         c = following;
     }
-    /* Full: a blank cluster goes on the end first, so the directory is never without its end. */
+    /* Full, or ending in the last sector of its last cluster: a blank cluster goes on the end first, so the directory
+     * is never without its end, then the entries, then the old end's free entries are marked deleted. */
     uint32_t more = 0;
     const char *error = fat_reserve(per_cluster*SECTOR, &more);
     if (!error)
@@ -595,10 +634,63 @@ const char *fat_add(uint32_t directory, const char name[11], unsigned attributes
         return error;
     if (!set_next(c, more) || !flush_fat())
         return WRITE_ERROR;
-    uint32_t sector = data_at+(more-2)*per_cluster;
     memset(block, 0, SECTOR);
-    put_entry(block, name, attributes, start, size);
-    return card_write(sector, block) ? 0:WRITE_ERROR;
+    memcpy(block, added, n*ENTRY);
+    if (!card_write(data_at+(more-2)*per_cluster, block))
+        return WRITE_ERROR;
+    if (!end_sector)
+        return 0;
+    if (!card_read(end_sector, block))
+        return READ_ERROR;
+    for (unsigned at = end_at; at < SECTOR; at += ENTRY)
+        block[at] = 0xe5;
+    return card_write(end_sector, block) ? 0:WRITE_ERROR;
+}
+
+const char *fat_add(uint32_t directory, const char name[11], unsigned attributes, uint32_t start, uint32_t size) {
+    put_entry(added, name, attributes, start, size);
+    return add_entries(directory, 1);
+}
+
+bool fat_long_name_ok(const char *long_name) {
+    static const char refused[] = "\\/:*?\"<>|";
+    unsigned length = 0;
+    while (long_name[length]) {
+        unsigned char ch = (unsigned char)long_name[length];
+        if (ch < 0x20 || ch > 0x7e)
+            return false;
+        for (const char *r = refused; *r; ++r)
+            if (ch == (unsigned char)*r)
+                return false;
+        ++length;
+    }
+    return length && length <= FAT_LONG_PIECES*LONG_PIECE && long_name[length-1] != ' ' && long_name[length-1] != '.';
+}
+
+const char *fat_add_named(uint32_t directory, const char name[11], const char *long_name, unsigned attributes,
+                          uint32_t start, uint32_t size) {
+    if (!fat_long_name_ok(long_name))
+        return BAD_NAME;
+    unsigned length = (unsigned)strlen(long_name);
+    unsigned pieces = (length+LONG_PIECE-1)/LONG_PIECE;
+    put_entry(added+pieces*ENTRY, name, attributes, start, size);
+    uint8_t sum = short_sum(added+pieces*ENTRY);
+    for (unsigned p = 0; p < pieces; ++p) {
+        /* The last piece comes first. */
+        unsigned piece = pieces-p;
+        uint8_t *e = added+p*ENTRY;
+        memset(e, 0, ENTRY);
+        e[0] = (uint8_t)(piece | (p ? 0u:LONG_FLAG_LAST));
+        e[11] = LONG_ATTRIBUTES;
+        e[13] = sum;
+        for (unsigned i = 0; i < LONG_PIECE; ++i) {
+            unsigned at = (piece-1)*LONG_PIECE+i;
+            /* The name, a zero after it if there's room, then 0xFFFF. */
+            uint16_t unit = at < length ? (uint8_t)long_name[at] : at == length ? 0:0xffffu;
+            core_put_le16(e+long_places[i], unit);
+        }
+    }
+    return add_entries(directory, pieces+1);
 }
 
 const char *fat_find(uint32_t directory, const char name[11], struct fat_entry *entry, bool *found) {
@@ -637,12 +729,29 @@ const char *fat_remove(uint32_t directory, const char name[11]) {
         return error;
     if (!w.is_found)
         return BAD_FOLDER;
+    uint8_t sum = short_sum(block+w.at);
     block[w.at] = 0xe5;
     /* A name given on a computer can have long-name pieces just before it. Those in this sector go with it. */
-    for (unsigned at = w.at; at >= ENTRY && block[at-ENTRY+11] == 0x0f; at -= ENTRY)
+    unsigned at = w.at;
+    for (; at >= ENTRY && block[at-ENTRY+11] == LONG_ATTRIBUTES && block[at-ENTRY] != 0xe5 && block[at-ENTRY+13] == sum;
+         at -= ENTRY)
         block[at-ENTRY] = 0xe5;
     if (!card_write(w.sector, block))
         return WRITE_ERROR;
+    /* And those that start in the sector before, after the entry itself has gone: a cut between leaves pieces that
+     * belong to nothing, which readers skip. */
+    if (!at && w.previous && w.previous != w.sector) {
+        if (!card_read(w.previous, block))
+            return READ_ERROR;
+        bool changed = false;
+        for (at = SECTOR; at >= ENTRY && block[at-ENTRY+11] == LONG_ATTRIBUTES && block[at-ENTRY] != 0xe5 &&
+                          block[at-ENTRY+13] == sum; at -= ENTRY) {
+            block[at-ENTRY] = 0xe5;
+            changed = true;
+        }
+        if (changed && !card_write(w.previous, block))
+            return WRITE_ERROR;
+    }
     return fat_release(w.found);
 }
 

@@ -323,4 +323,91 @@ with tempfile.TemporaryDirectory() as folder:
     def folder_check(cut):
         still_old(cut)
     every_cut('new folders', 'mkdir', 'S/X/Y', check=folder_check)
+
+    # Long names: a computer sees them, and they come back from fat_list_named().
+    def newlong(path, short, long, content, **kw):
+        data.write_bytes(content)
+        return run('newlong', path, short, long, data, **kw)
+
+    make()
+    run('mkdir', 'L')
+    body = blob(9000)
+    newlong('L', 'SLOT01.SLT', 'Felucca 1.8 beta.slt', body)
+    fsck()
+    assert get('L', 'Felucca 1.8 beta.slt') == body
+    assert get('L', 'SLOT01.SLT') == body
+    listing = subprocess.run([MDIR, '-i', image, '::/L'], capture_output=True, text=True, env=ENV).stdout
+    assert 'Felucca 1.8 beta.slt' in listing, listing
+    lines = run('names', 'L', 'SLT').splitlines()
+    assert [l.split('\t')[3] for l in lines if l.startswith('name\t')] == ['Felucca 1.8 beta.slt'], lines
+    # Every length up to the longest, on one image: one to five pieces.
+    lengths = (1, 12, 13, 14, 25, 26, 27, 38, 39, 40, 52, 64, 65)
+    for i, n in enumerate(lengths):
+        name = ''.join('abcdefghij KLMNOP-_,()'[(i+k) % 22] for k in range(n-4)).strip() or 'x'
+        name = (name+'.slt')[-n:] if n >= 5 else 'x'*n
+        name = name.strip().rstrip('.') or 'y'
+        newlong('L', f'N{i:02}.SLT', name, name.encode())
+        assert get('L', name) == name.encode(), name
+    fsck()
+    # Refused: a character a computer can't have, a space or a dot at the end, too long, empty.
+    before_refused = image.read_bytes()
+    for bad in ('a/b.slt', 'a:b', 'a*b', 'ends with space ', 'ends with dot.', 'x'*66, ''):
+        assert newlong('L', 'BAD.SLT', bad, b'x', expect=3) == 'error NAME NOT ALLOWED', bad
+    assert get('L', 'BAD.SLT') is None
+    # The test wrote each one's data first: those clusters are free to reclaim, as an app releases them.
+    fsck(allow_lost=True)
+    image.write_bytes(before_refused)
+    # Removing takes its pieces too.
+    run('remove', 'L', 'SLOT01.SLT')
+    assert get('L', 'Felucca 1.8 beta.slt') is None
+    fsck()
+
+    # Wherever the directory ends: with one sector a cluster, every place in it, needing up to six entries. The names
+    # go where they fit, or past the end into the next cluster.
+    for filler in range(14):
+        for pieces in (1, 3, 5):
+            make(per_cluster=1)
+            run('mkdir', 'E')
+            for k in range(filler):
+                new('E', f'F{k:02}.BIN', b'f')
+            name = ('z'*(13*pieces-4))+'.slt'
+            newlong('E', 'LONG.SLT', name, b'long')
+            fsck()
+            assert get('E', name) == b'long', (filler, pieces)
+            for k in range(filler):
+                assert get('E', f'F{k:02}.BIN') == b'f', (filler, pieces, k)
+            # And the directory goes on after it.
+            new('E', 'AFTER.BIN', b'after')
+            assert get('E', 'AFTER.BIN') == b'after', (filler, pieces)
+            fsck()
+    # A run of deleted entries in the middle is used again.
+    make(per_cluster=1)
+    run('mkdir', 'E')
+    for k in range(12):
+        new('E', f'F{k:02}.BIN', b'f')
+    for k in (3, 4, 5, 6):
+        run('remove', 'E', f'F{k:02}.BIN')
+    newlong('E', 'MID.SLT', 'in the middle.slt', b'mid')
+    assert get('E', 'in the middle.slt') == b'mid'
+    fsck()
+
+    # The power goes at each write: the file is there whole with its name, or not at all.
+    def long_cut(filler, pieces):
+        global start
+        make(per_cluster=1)
+        run('mkdir', 'S')
+        for k in range(filler):
+            new('S', f'F{k:02}.BIN', b'f')
+        put('', 'KEEP.TXT', keep)
+        start = image.read_bytes()
+        name = ('q'*(13*pieces-4))+'.slt'
+        data.write_bytes(added)
+        def check(cut):
+            got = get('S', name)
+            assert got is None or got == added, (filler, pieces, cut)
+            for k in range(filler):
+                assert get('S', f'F{k:02}.BIN') == b'f', (filler, pieces, cut, k)
+        every_cut(f'long name after {filler}, {pieces} pieces', 'newlong', 'S', 'LONG.SLT', name, data, check=check)
+    for filler, pieces in ((0, 2), (10, 5), (13, 3), (14, 1)):
+        long_cut(filler, pieces)
 print('fat writing OK')

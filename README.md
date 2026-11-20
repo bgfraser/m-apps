@@ -96,6 +96,10 @@ int app_main(unsigned lsb_mhz) {
 - Returning goes back to what started the app, or to download mode if that was the ROM. An app can only return if it stayed within the RAM §11.8 allows.
 - The file and its RAM have to end by `0x01C7F000`, as the log takes the top of the slot §11.8 describes.
 - `APP_BOARD` is 1 on the FM-1 and 2 on the SMK-37, and each board gets its own build.
+- **One file for both boards:** an app in `UNIVERSAL_APPS` is also built in `build/any`, with `APP_BOARD` 0 and board 0 in its trailer, which the launcher and m-bootloader take on either. It asks `app_board()` which board it's on, and uses the answer where it would have used `APP_BOARD`. That reads the unit's own flash, never its pins (m-bootloader's SPEC §8.1): an SMK-37 by its calibration (`trimdat` at `0xC1224`, or its copy `TRIMCOPY` at `0xFF000`), an FM-1 by its flash chip (`0x856014`, `0xB36014`). It's 0 for anything else, and an app should then touch no pin and return. In a per-board build, `app_board()` is `APP_BOARD`. `hello`, `usbdisk`, `slots`, `mp3`, the launcher and its loader are universal, and were run on both boards.
+- **The launcher's look** for an app: `kit/canvas.h` draws a full 240 x 240 picture in RAM with the launcher's colours, cards, Barlow text and bar, and sends only what changed. `kit/pixel.h` is the player's 90s look, drawn at half size and shown doubled. Both draw on a computer too, which the screen tests use.
+- **Keys:** `kit/keys.h` reads the whole matrix on both boards, polled: the 27 piano keys both have (F3 to G5) and the buttons, where `board_keys()` reads four. REC (SEQ REC) is the way back in every app. `kit/textentry.h` types on the piano keys.
+- Started from `run-ram`, an app that ends shows `THE APP HAS ENDED` before the unit goes back to download mode, as the SMK-37's panel would otherwise keep the app's last screen.
 - An app needing a larger stack sets `<name>_STACK := 0x8000` in the `Makefile`. The default is 16 KiB.
 - The card driver is `kit/card.h`, for a unit with a card mod.
 - `META.TXT` beside the app's source is what the card's launcher shows for it (see `picker` below), and `ICON.QOI` its icon, if it has one, made from `icon.png` with `tools/icon.py`. `make card` puts them in the app's folder.
@@ -142,7 +146,7 @@ sudo m-flasher download-mode
 sudo m-flasher run-ram build/smk37/MENU.BIN --addr 0x01C28000
 ```
 
-- **Keys:** OCT- and OCT+ move, and PLAY starts, on the FM-1. On the SMK-37, it's `<`, `>` and SEQ PLAY. Holding a key repeats it. `Back`, at the end of the list, goes back to what started it, which from `run-ram` means download mode.
+- **Keys:** OCT- and OCT+ move, and PLAY starts, on the FM-1. On the SMK-37, it's `<`, `>` and SEQ PLAY. Holding a key repeats it. `Back`, at the end of the list, goes back to what started it, which from `run-ram` means download mode, and so does REC (SEQ REC on the SMK-37) from anywhere in the list.
 - **Names:** folders are found by their 8.3 names. The name to show comes from `META.TXT`, and the list is in order of it.
 - **Checks:** before loading, it checks the file's trailer and refuses another board's app with `OTHER BOARD`. After loading, it checks the CRC. What's refused shows in the bar at the bottom.
 - **Returning:** an app that returns comes back to the list, which is read again, as the app may have changed the card. A non-zero result shows as `MP3 Player returned 7`. It shows the first 100 apps by name.
@@ -152,12 +156,15 @@ sudo m-flasher run-ram build/smk37/MENU.BIN --addr 0x01C28000
 
 ### mp3
 
-Lists the MP3 files in the card's root, plays the one you choose, and shows the time elapsed and left. It needs a card mod, and `picker` to start it: `make card` puts it in `/MBOOT/APPS/MP3`. It's mainly a reference for playing sound and reading a card at once, so it has no pause, seeking or volume.
+A player in the look of the 90s desktop players: a main window with segment digits, an analyser, the title scrolling, the bitrate, rate and channels, a position bar and the buttons, over its playlist. It plays the MP3 files in the card's root, one after another. It needs a card mod, and `picker` to start it: `make card` puts it in `/MBOOT/APPS/MP3`.
 
-- **Sound** comes from `kit/audio.c`, polled, with no interrupts: fill a half buffer each time one comes free. The DAC runs at 24 MHz / 544, about 44118 Hz, which plays 44.1 kHz files 0.04% fast. Other rates go through a simple resampler. If filling falls behind, the hardware repeats old samples, and nothing warns of it, so the app counts missed halves in its log.
-- **Decoding** is [minimp3](https://github.com/lieff/minimp3). At the CPU's 360 MHz from the bootloader, a 320 kbps frame took about 3.3 ms of its 26 ms. It also keeps up at 96 MHz from `run-ram`, at about 12.5 ms.
-- **Names** come from `fat_list_named()` in UTF-8. `screen_name()` is the one function turning them into what the screen has, which is capitals and a few others, with blanks for what it lacks and `?` past ASCII. To use a better font, start there.
-- **The time left** comes from the frame count in a file's first frame if it has one, and otherwise from its size and bitrate.
+- **Keys:** OCT- and OCT+ (`<` and `>` on the SMK-37) move through the playlist, and a track moved to starts at once. `<< BACK`, at the end, is there while playing too, and changes nothing until PLAY. Held while playing, they rewind and fast-forward, in 2 s jumps with a moment of sound between. PLAY starts and pauses, and on `<< BACK` it leaves. REC (SEQ REC on the SMK-37) leaves from anywhere, as it means nothing else once the unit has started.
+- **The look** is all drawn in code, in `ui.c`: nothing is a bitmap. It's drawn at 120 × 120 and shown at twice that, as the players' double-size mode did, which keeps it readable on the small screen. The look is shared with other apps through `kit/pixel.c`, and its fonts are pictures in `kit/pixel_font.py`, which makes `pixel_font.h`. Only what changed is sent, and `tests/mp3_ui_test.py` draws the screens on a computer.
+- **Sound** comes from `kit/audio.c`, polled, with no interrupts. Decoded sound goes into a ring of about 190 ms, and the half buffers are filled from it between every card read, decode and piece of the screen, so a slow moment doesn't cut the sound. The screen is drawn when the ring is full, a little at a time. The DAC runs at 24 MHz / 544, about 44118 Hz, which plays 44.1 kHz files 0.04% fast. Other rates go through a simple resampler. The log counts the halves the ring couldn't fill.
+- **Decoding** is [minimp3](https://github.com/lieff/minimp3). At the CPU's 360 MHz from the bootloader, a 320 kbps frame took about 3.3 ms of its 26 ms. At 96 MHz from `run-ram` it takes about 13 ms, and an FM-1 played 22 kHz mono, 48 kHz and VBR files there with no gaps.
+- **The analyser** is a 512-point FFT of each frame, in 14 bands of about two thirds of an octave (`spectrum.c`).
+- **Names** come from `fat_list_named()` in UTF-8. `track_name()` turns them into what the font has, which is ASCII, drawn in capitals, with `?` past it.
+- **The length** comes from the frame count in a file's first frame if it has one, and otherwise from its size and bitrate. Seeking guesses where a second starts from the same.
 
 `apps/tone` is a smaller start: two tones, with the real sample rate in its log.
 
@@ -175,12 +182,13 @@ It's a test for now, not on the card.
 
 Keeps firmware and its settings on the card, and swaps between them with no computer. It needs a card mod, and `picker` to start it: `make card` puts it in `/MBOOT/APPS/SLOTS`.
 
-A slot is `/MBOOT/SLOTS/<8 hex digits>/NAME.BIN`, in a folder named from the unit's unique ID, so slots can't be loaded on the wrong unit by mistake. It's the same 1 MiB file as an M-Flasher backup, so slots can be copied and renamed on a computer. Names are 8.3.
+A slot is `/MBOOT/SLOTS/FM1/` or `/MBOOT/SLOTS/SMK37/`, then `<its name>.slt`, shared by every unit of that model. It holds the firmware's part of the flash only, what a load writes: `0x4000` up to the key area at `0xFF000`, and on the SMK-37 not its Bluetooth and calibration sectors at `0xC0000`-`0xC1FFF`, as [clean-flash](https://github.com/jvitkauskas/clean-flash)'s firmware scope. The boot area, the key area and the unit's own data are never in a slot, and a load never writes them. Blank sectors are left out: a 512-byte header (`apps/slots/slotfile.h`) says which sectors follow it, with CRCs of both.
 
-- **The list** marks the slot `ON UNIT`. `SAVE AS NEW SLOT` saves what's there as `SLOT01` and so on. Choosing a slot offers `LOAD` and `DELETE`, each needing a 3 s hold.
-- **Loading** writes what a restore does: not the boot area, the key area, or the SMK-37's Bluetooth and calibration sectors. It takes about 30 s, and then the unit restarts into that firmware.
-- **It saves first.** Before writing, what's on the unit goes over the slot it came from, or into a new slot if it's other firmware, or if the slot being loaded is the one it came from. If a slot already holds it, nothing is saved. If there's no room, it stops with nothing erased.
-- **If the power goes,** switch on again. With no valid firmware, the bootloader's menu opens by itself, showing `APP NOT FOUND`. Choose `SD CARD`, then `SLOTS`, and it shows `LAST LOAD STOPPED` with that slot selected. What isn't valid firmware is never saved, so the slot stays good. Load it again.
+- **The list** has `Save what's on the unit` first, then the slots, marking the one that's `On the unit now`, then `Back`. Choosing a slot offers `Load it onto the unit`, with PLAY (SEQ PLAY) held for 1 s, and `Delete it`, held for 2 s. REC (SEQ REC) goes back from anywhere.
+- **Names** are typed on the piano keys when saving (`kit/textentry.c`, from fm1-radio): F3 to E5 type a to z, G5 deletes, OCT- held types capitals, and OCT+ held digits and symbols a file name may have. A computer sees the same name, as `kit/fat.c` writes long names. Left empty, it's `Slot 1` and on; a name a slot has already gets a number.
+- **Loading** writes only what differs, erasing the sectors the slot leaves blank. It takes about 30 s, and then the unit restarts into that firmware. Before it writes, the slot's CRC and its firmware are checked, as the bootloader checks firmware, with the unit's own boot area.
+- **It saves first.** Before writing, what's on the unit goes over the slot it came from, or into a new slot, `Saved`, if it's other firmware, or if the slot being loaded is the one it came from. If a slot already holds it, nothing is saved. If there's no room, it stops with nothing erased. Each unit keeps which slot it came from in `<8 hex digits of its unique ID>.DAT` beside the slots.
+- **If the power goes,** switch on again. With no valid firmware, the bootloader's menu opens by itself, showing `APP NOT FOUND`. Choose `SD CARD`, then Slots, and it shows `The last load stopped` with that slot selected. What isn't valid firmware is never saved, so the slot stays good. Load it again.
 
 The card is written in an order where losing power leaves, at worst, clusters no file uses, which `fsck` can reclaim. The guard stays on while flash is written, unlike what `AGENTS.md` says for other apps, as each sector feeds it. So only a real hang reaches it, and then the unit ends in download mode.
 
@@ -201,7 +209,9 @@ DO shares the panel's D/C, and CS is the inverse of the panel's CS.
 make run APP=usbdisk BOARD=smk37 RUN_FLAGS="--timeout 3600" M_FLASHER="sudo m-flasher"
 ```
 
-**To leave,** eject the disk on the computer, which is the way to use normally, or press PLAY (SEQ PLAY on the SMK-37), which doesn't wait for the computer to finish, so eject first if you can. With no computer attached, it also leaves after 2 minutes. It doesn't leave just because the disk is idle, as a computer can hold writes back for a while.
+**To leave,** eject the disk on the computer, which is the way to use normally, or press REC (SEQ REC on the SMK-37), which doesn't wait for the computer to finish, so eject first if you can. With no computer attached, it also leaves after 2 minutes. It doesn't leave just because the disk is idle, as a computer can hold writes back for a while.
+
+**The screen** is in the launcher's look and font: an SD card cabled to a laptop, the same on both boards, with dots running along the cable while data moves (blue reading, orange writing), and the speed and totals below. The pictures are drawn by `apps/usbdisk/art.py`. It draws between USB commands, when the card is idle, and only what changed, so it costs about 2% of the speed.
 
 A write has reached the card before the computer is told it succeeded, and data is checked by CRC in both directions. It picks the fastest card clock that reads cleanly, from 24 MHz down to 4, and the app's log says which. From `run-ram`, an FM-1 prototype with long wires settled on 8 MHz, at about 750 KB/s reading and 440 KB/s writing. An SMK-37 settled on 12 MHz, at about 870 KB/s reading and 440 KB/s writing, and about 1,100 KB/s and 820 KB/s from the bootloader. USB 1.1 limits it to around 1 MB/s whatever the clock.
 
@@ -220,9 +230,11 @@ Started from the launcher on a unit with a card mod, it has repaired an FM-1 fro
 
 ## License
 
-MIT, as m-bootloader is. See [LICENSE](LICENSE). Two parts have their own licences, and each file's header says which:
+MIT, as m-bootloader is. See [LICENSE](LICENSE). Some parts have their own licences, and each file's header says which:
 
 - `kit/audio.c` and `kit/audio.h` are MPL-2.0, adapted from [felucca-bsp](https://github.com/hugelton/felucca-bsp). MPL applies file by file, so changes to these two files stay MPL-2.0, and an app using them can have any licence.
 - `apps/mp3/minimp3.h` is [minimp3](https://github.com/lieff/minimp3), CC0-1.0.
+- `kit/keys.c` and `kit/keys.h` are MPL-2.0, from felucca-bsp's key tables (`boards/fm1/fm1_input.h` and `boards/smk37/fm1_input.h`).
+- `kit/textentry.c` and `kit/textentry.h` are MPL-2.0, adapted from Charles Vestal's [fm1-radio](https://github.com/charlesvestal/fm1-radio) password page.
 - `unbrick` is built from the `m-unbricker` submodule (MIT). It holds glyphs rendered from DejaVu Sans (Bitstream Vera licence and public domain), and its own list in `m-unbricker/THIRD-PARTY.md`.
-- `apps/picker/font.h` is Barlow Semi Condensed, under the SIL Open Font License 1.1 (`apps/picker/Barlow-OFL.txt`), as 4-bit alpha made by fm1-base's `tools/gen_font.py`.
+- `kit/font.h` is Barlow Semi Condensed, under the SIL Open Font License 1.1 (`kit/Barlow-OFL.txt`), as 4-bit alpha made by fm1-base's `tools/gen_font.py`.

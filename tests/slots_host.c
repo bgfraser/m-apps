@@ -40,7 +40,7 @@ bool card_write(uint32_t sector, const uint8_t *data) {
 
 bool flash_read(void *ctx, uint32_t address, void *out, uint32_t size) {
     (void)ctx;
-    if (address+size > SLOT_SIZE)
+    if (address+size > SLOT_FLASH_SIZE)
         abort();
     memcpy(out, flash+address, size);
     return true;
@@ -72,9 +72,11 @@ bool flash_program(void *ctx, uint32_t address, const void *data, uint32_t size)
     return true;
 }
 
+/* As the bootloader's check does, it starts from the boot area's header, which says where the firmware is. */
 static bool valid(bool (*read)(void *, uint32_t, void *, uint32_t), void *ctx) {
-    uint8_t head[4];
-    return read(ctx, 0x4000, head, 4) && !memcmp(head, "GOOD", 4);
+    uint8_t head[4], boot[4];
+    return read(ctx, 0, boot, 4) && memcmp(boot, "\xff\xff\xff\xff", 4) && read(ctx, 0x4000, head, 4) &&
+           !memcmp(head, "GOOD", 4);
 }
 
 static uint8_t *map(const char *path, size_t *size) {
@@ -92,29 +94,25 @@ static uint8_t *map(const char *path, size_t *size) {
 static struct slots s;
 
 static int named(const char *name) {
-    char full[8];
-    memset(full, ' ', 8);
-    memcpy(full, name, strlen(name));
     for (unsigned i = 0; i < s.count; ++i)
-        if (!memcmp(s.list[i].name, full, 8))
+        if (!strcmp(s.list[i].name, name))
             return (int)i;
     printf("no slot %s\n", name);
     exit(4);
 }
 
-/* A name for printing, without its padding. */
-static const char *trim(const char name[8]) {
-    static char buffers[4][9];
-    static unsigned turn;
-    char *out = buffers[turn++%4];
-    memcpy(out, name, 8);
-    out[8] = 0;
-    for (int i = 7; i >= 0 && out[i] == ' '; --i)
-        out[i] = 0;
-    return out;
+static const char *shown(int index) {
+    return index == NO_SLOT ? "-" : s.list[index].name;
 }
 
-/* card, flash, cut after this many changes or -1, then: list | save | load NAME | delete NAME */
+static int find_id(const char id[8]) {
+    for (unsigned i = 0; i < s.count; ++i)
+        if (id[0] && !memcmp(s.list[i].id, id, 8))
+            return (int)i;
+    return NO_SLOT;
+}
+
+/* card, flash, cut after this many changes or -1, then: list | save NAME | load NAME | delete NAME */
 int main(int argc, char **argv) {
     if (argc < 5)
         return 2;
@@ -124,11 +122,10 @@ int main(int argc, char **argv) {
     flash = map(argv[2], &size);
     cut_after = atol(argv[3]);
     s.valid = valid;
-    const char *error = slots_open(&s, card_sectors, uid);
+    const char *error = slots_open(&s, card_sectors, uid, 0x856014u, APP_BOARD);
     const char *what = argv[4];
-    char name[8];
     if (!error && !strcmp(what, "save"))
-        error = slots_save_new(&s, name);
+        error = slots_save_new(&s, argv[5]);
     else if (!error && !strcmp(what, "load"))
         error = slots_load(&s, (unsigned)named(argv[5]));
     else if (!error && !strcmp(what, "delete"))
@@ -140,16 +137,16 @@ int main(int argc, char **argv) {
     /* Read it all again, as the unit would after a restart. */
     memset(&s, 0, sizeof(s));
     s.valid = valid;
-    error = slots_open(&s, card_sectors, uid);
+    error = slots_open(&s, card_sectors, uid, 0x856014u, APP_BOARD);
     if (error) {
         printf("error %s\n", error);
         return 3;
     }
     int here = slots_on_unit(&s), pending = slots_pending(&s);
-    printf("ok %ld here=%s pending=%s active=%s slots=", ops, here == NO_SLOT ? "-":trim(s.list[here].name), pending == NO_SLOT ? "-":trim(s.list[pending].name),
-           s.active[0] ? trim(s.active):"-");
+    printf("ok %ld\there=%s\tpending=%s\tactive=%s\tslots=", ops, shown(here), shown(pending),
+           shown(find_id(s.active)));
     for (unsigned i = 0; i < s.count; ++i)
-        printf("%s,", trim(s.list[i].name));
+        printf("%s|", s.list[i].name);
     printf("\n");
     return 0;
 }

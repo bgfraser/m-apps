@@ -1,7 +1,7 @@
 /* SPDX-License-Identifier: OFL-1.1 */
 /* Barlow Semi Condensed (SIL Open Font License 1.1, the Barlow Project Authors; see Barlow-OFL.txt), two of its sizes
  * as 4-bit alpha, made by fm1-base's tools/gen_font.py with FM1_FONT_TRIM=1: each glyph its lit box, as left, top and
- * rows, then the rows. Only what the launcher uses. */
+ * rows, then the rows. What the launcher and the apps use. */
 #ifndef FONT_H
 #define FONT_H
 #include <stdint.h>

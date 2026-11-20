@@ -9,7 +9,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]/'m-bootloader/tools')
 from bankcb import crc16
 
 LARGEST = 0xc000
-BOARDS = {'fm1': 1, 'smk37': 2}
+BOARDS = {'any': 0, 'fm1': 1, 'smk37': 2}
 
 
 def main():

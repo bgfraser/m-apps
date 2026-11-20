@@ -33,7 +33,7 @@ static const char *load(unsigned lsb_mhz) {
     if (!error && !found)
         error = "NO /MBOOT/LAUNCH.BIN";
     if (!error)
-        error = image_load(&file, (void *)(uintptr_t)LAUNCHER, &launcher_kind, APP_BOARD);
+        error = image_load(&file, (void *)(uintptr_t)LAUNCHER, &launcher_kind, app_board());
     /* The launcher starts the card itself. */
     if (sectors)
         card_finish();
@@ -53,8 +53,11 @@ int app_main(unsigned lsb_mhz) {
         return 0;
     }
     app_log("launcher: %s", error);
-    board_init(APP_BOARD == 2);
-    if (display_init(APP_BOARD)) {
+    unsigned board = app_board();
+    if (!board)
+        return 0;
+    board_init(board == 2);
+    if (display_init(board)) {
         for (unsigned row = 0; row < 15; ++row)
             display_text(row, WHITE, "");
         display_text(1, WHITE, "M-APPS");
