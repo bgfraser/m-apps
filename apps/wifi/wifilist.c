@@ -113,7 +113,7 @@ static void drop(struct wifi_list *l, unsigned i) {
 
 static int removed_at(const struct wifi_list *l, const char *ssid) {
     for (unsigned i = 0; i < l->removed_count; ++i)
-        if (same(l->removed[i], ssid))
+        if (same(l->removed[i].ssid, ssid))
             return (int)i;
     return -1;
 }
@@ -125,9 +125,9 @@ void wifi_list_read(struct wifi_list *l, const char *text, unsigned n) {
     /* The network being read (0 while skipping one), and whether its password can't be. */
     struct wifi_net *net = 0;
     bool bad = false;
-    unsigned at = bom(text, n);
+    unsigned at = bom(text, n), start = at;
     struct line line;
-    while (next_line(text, n, &at, &line)) {
+    for (; next_line(text, n, &at, &line); start = at) {
         const char *value;
         unsigned value_n;
         if (skipped_line(&line))
@@ -148,6 +148,7 @@ void wifi_list_read(struct wifi_list *l, const char *text, unsigned n) {
             memset(net, 0, sizeof *net);
             set(net->ssid, name);
             net->in_file = true;
+            net->at = start;
         } else if (is(&line, "password=", &value, &value_n)) {
             if (net && !bad)
                 bad = !copy(net->pass, WIFI_PASS_MOST, value, value_n) || !wifi_pass_ok(net->pass);
@@ -187,6 +188,14 @@ static void put_setting(struct out *o, const char *name, const char *value, cons
     put(o, name);
     put(o, value);
     put_n(o, end, end_n);
+}
+
+/* A line as it was. One that starts with a byte order mark is plain text where it is, but would be skipped as a mark at
+ * the start of the file: one that wasn't first, but would be now, gets a line end before it. */
+static void put_line(struct out *o, const struct line *l, const char *text, const char *nl) {
+    if (!o->n && l->s != text && bom(l->s, l->len))
+        put(o, nl);
+    put_n(o, l->s, l->whole);
 }
 
 /* Whether the network whose ssid= ends at at has a password= among its lines. */
@@ -233,13 +242,13 @@ bool wifi_list_write(const struct wifi_list *l, const char *old, unsigned old_n,
     /* Where the blank line just copied began, and where it ended: a removed network takes it too, so adding and removing
      * one leaves the file as it was. */
     unsigned blank_at = 0, after_blank = (unsigned)-1;
-    while (o.ok && next_line(old, old_n, &at, &line)) {
+    for (unsigned start = at; o.ok && next_line(old, old_n, &at, &line); start = at) {
         /* This line's own end, for a line rewritten in place. */
         const char *end = line.s+line.len;
         unsigned end_n = line.whole-line.len;
         if (skipped_line(&line)) {
             unsigned before = o.n;
-            put_n(&o, line.s, line.whole);
+            put_line(&o, &line, old, nl);
             if (!line.len)
                 blank_at = before, after_blank = o.n;
         } else if (is(&line, "ssid=", &value, &value_n)) {
@@ -251,7 +260,8 @@ bool wifi_list_write(const struct wifi_list *l, const char *old, unsigned old_n,
             char name[WIFI_SSID_MOST+1];
             bool named = copy(name, WIFI_SSID_MOST, value, value_n);
             int i = named ? wifi_list_find(l, name) : -1;
-            if (i >= 0 && !written[i]) {
+            /* The copy that was read, if it was; a new one's first copy. */
+            if (i >= 0 && !written[i] && (!l->net[i].in_file || l->net[i].at == start)) {
                 mode = OURS;
                 ours = i;
                 written[i] = true;
@@ -271,7 +281,7 @@ bool wifi_list_write(const struct wifi_list *l, const char *old, unsigned old_n,
                     o.n = blank_at;
             } else {
                 mode = KEEP;
-                put_n(&o, line.s, line.whole);
+                put_line(&o, &line, old, nl);
             }
         } else if (is(&line, "password=", &value, &value_n) && mode != KEEP) {
             if (mode == OURS)
@@ -281,7 +291,7 @@ bool wifi_list_write(const struct wifi_list *l, const char *old, unsigned old_n,
             if (use)
                 put_setting(&o, "use=", use, end, end_n);
         } else if (mode != DROP) {
-            put_n(&o, line.s, line.whole);
+            put_line(&o, &line, old, nl);
         }
     }
     /* What's added starts on a line of its own. */
@@ -323,9 +333,10 @@ int wifi_list_put(struct wifi_list *l, const char *ssid, const char *pass) {
         /* Removed and put back: it's still in the file, where its password is changed. */
         int r = removed_at(l, ssid);
         if (r >= 0) {
-            memmove(l->removed[r], l->removed[r+1], (l->removed_count-(unsigned)r-1)*sizeof l->removed[0]);
-            --l->removed_count;
             l->net[i].in_file = true;
+            l->net[i].at = l->removed[r].at;
+            memmove(&l->removed[r], &l->removed[r+1], (l->removed_count-(unsigned)r-1)*sizeof l->removed[0]);
+            --l->removed_count;
         }
     }
     set(l->net[i].pass, pass);
@@ -337,7 +348,9 @@ void wifi_list_remove(struct wifi_list *l, unsigned i) {
     if (i >= l->count)
         return;
     /* At most WIFI_MOST were read, and each is recorded once. */
-    if (l->net[i].in_file && l->removed_count < WIFI_MOST)
-        set(l->removed[l->removed_count++], l->net[i].ssid);
+    if (l->net[i].in_file && l->removed_count < WIFI_MOST) {
+        set(l->removed[l->removed_count].ssid, l->net[i].ssid);
+        l->removed[l->removed_count++].at = l->net[i].at;
+    }
     drop(l, i);
 }
