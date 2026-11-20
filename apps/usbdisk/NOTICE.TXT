@@ -1,0 +1,6 @@
+USB Disk, from m-apps: https://github.com/jvitkauskas/m-apps
+This file was built from @SOURCE@
+
+It is MIT, Copyright (c) 2026 Julius Vitkauskas (LICENSE in the source).
+
+The text is drawn in Barlow Semi Condensed, under the SIL Open Font License 1.1, below.

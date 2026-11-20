@@ -1,0 +1,6 @@
+The card's launcher (MENU.BIN, LAUNCH.BIN), from m-apps: https://github.com/jvitkauskas/m-apps
+These files were built from @SOURCE@
+
+They are MIT, Copyright (c) 2026 Julius Vitkauskas (LICENSE in the source).
+
+The text is drawn in Barlow Semi Condensed, under the SIL Open Font License 1.1, below.

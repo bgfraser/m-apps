@@ -22,6 +22,7 @@ To check a change really works, run it. A clean build proves little here, as mos
 3. Set up what you use: `board_init(APP_BOARD == 2)` for keys, `display_init(APP_BOARD)` for the screen, and `flash_init(1, 1)` for flash.
 4. Call `board_restore()` before returning, if you called `board_init`.
 5. Say what it is for the card's launcher in `apps/<name>/META.TXT`: `name=`, `about=` and `version=` lines. Add it to `CARD_APPS` in the `Makefile` if it belongs on everyone's card.
+6. If it uses code or a font under another licence (MPL-2.0 kit parts such as `kit/audio.c`, `kit/keys.c` or `kit/textentry.c`; the Barlow font through `kit/canvas.c`; anything else from outside), write `apps/<name>/NOTICE.TXT` as the others are written, and list the licence texts it has to carry in `<name>_LICENSES` in the `Makefile`. See README's License section.
 
 `apps/hello` is the example to copy. Each board gets its own build, with `APP_BOARD` set to 1 or 2. Add it to `UNIVERSAL_APPS` too for one file for both (`build/any`, `APP_BOARD` 0), and ask `app_board()` where it would use `APP_BOARD`: it reads the board from the flash, and is 0, touch no pin, when it can't tell.
 
