@@ -31,6 +31,21 @@ jobs:
         run: echo "TOOLCHAIN=${{ steps.toolchain.outputs.path }}" >> "$GITHUB_ENV"
       - name: Build every app for both boards
         run: make -j2
+      - name: USB.BIN's size, against stage 2's 32 KiB and the RAM up to the log
+        shell: bash
+        run: |
+          size=$(stat -c%s build/fm1/USB.BIN)
+          end=$(( 0x$("$TOOLCHAIN/bin/llvm-nm" build/fm1/usbflash-stage2.elf | awk '$3 == "__ram_end" {print $1}') ))
+          line="USB.BIN: $size of 32768 bytes ($(( 32768 - size )) free); data and stacks end at $(printf '0x%08x' $end), $(( 0x1c7f000 - end )) bytes below the log"
+          echo "$line"
+          echo "$line" >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: usb-bin-${{ github.sha }}
+          if-no-files-found: error
+          path: |
+            build/fm1/USB.BIN
+            build/fm1/usbflash-stage2.map
       - name: Tests
         run: make test
       - name: The system's clang with libFuzzer (the clang first on PATH is the pi32v2 toolchain's)
