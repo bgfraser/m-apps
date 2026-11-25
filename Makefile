@@ -43,7 +43,7 @@ picker_ORIGIN := 0x1c0a800
 picker_LENGTH := 0xc000
 picker_STACK := 0x2000
 
-all: $(foreach a,$(APPS) unbrick,build/fm1/$(a).app build/smk37/$(a).app) $(foreach a,$(UNIVERSAL_APPS) unbrick,build/any/$(a).app) build/any/MENU.BIN build/any/LAUNCH.BIN build/fm1/logread.bin build/smk37/logread.bin build/fm1/MENU.BIN build/smk37/MENU.BIN build/fm1/LAUNCH.BIN build/smk37/LAUNCH.BIN
+all: $(foreach a,$(APPS) unbrick,build/fm1/$(a).app build/smk37/$(a).app) $(foreach a,$(UNIVERSAL_APPS) unbrick,build/any/$(a).app) build/any/MENU.BIN build/any/LAUNCH.BIN build/fm1/logread.bin build/smk37/logread.bin build/fm1/MENU.BIN build/smk37/MENU.BIN build/fm1/LAUNCH.BIN build/smk37/LAUNCH.BIN build/fm1/USB.BIN
 
 clean:
 	rm -rf build
@@ -108,6 +108,11 @@ $(eval $(call BOARD_template,smk37,-DBOARD_SMK,2))
 # Universal apps: one file for both boards, board 0 in its trailer, finding out which it's on with app_board().
 $(eval $(call BOARD_template,any,,0))
 
+# What an app links: $(call app_objs,<app>,<board>)
+app_objs = $(patsubst apps/$(1)/%.c,build/$(2)/$(1)/%.o,$(wildcard apps/$(1)/*.c)) \
+	$(foreach k,app audio card fat canvas keys load log pixel start textentry,build/$(2)/kit/$(k).o) \
+	$(addprefix build/$(2)/drv/,$(addsuffix .o,$(DRIVERS)))
+
 # app, board, its -D flag, its number, its name for the trailer
 define APP_template
 build/$(2)/$(1)/%.o: apps/$(1)/%.c $$(wildcard apps/$(1)/*.h) kit/app.h kit/app_launch.h kit/log.h Makefile
@@ -116,7 +121,7 @@ build/$(2)/$(1)/%.o: apps/$(1)/%.c $$(wildcard apps/$(1)/*.h) kit/app.h kit/app_
 build/$(2)/$(1)/app.ld: kit/app.ld.S Makefile
 	@mkdir -p $$(@D)
 	$(CLANG) -E -P -x c -DAPP_STACK=$$(or $$($(1)_STACK),$(APP_STACK_DEFAULT)) -DAPP_ORIGIN=$$(or $$($(1)_ORIGIN),0x1c30000) -DAPP_LENGTH=$$(or $$($(1)_LENGTH),0x4f000) -DAPP_LOW=$$(or $$($(1)_LOW),0x1c16800) $$< -o $$@
-build/$(2)/$(1).elf: $$(patsubst apps/$(1)/%.c,build/$(2)/$(1)/%.o,$$(wildcard apps/$(1)/*.c)) build/$(2)/kit/app.o build/$(2)/kit/audio.o build/$(2)/kit/card.o build/$(2)/kit/fat.o build/$(2)/kit/canvas.o build/$(2)/kit/keys.o build/$(2)/kit/load.o build/$(2)/kit/log.o build/$(2)/kit/pixel.o build/$(2)/kit/start.o build/$(2)/kit/textentry.o $$(addprefix build/$(2)/drv/,$$(addsuffix .o,$(DRIVERS))) build/$(2)/$(1)/app.ld
+build/$(2)/$(1).elf: $$(call app_objs,$(1),$(2)) build/$(2)/$(1)/app.ld
 	$(LINK) --plugin-opt=O3 --relax --gc-sections -T build/$(2)/$(1)/app.ld -Map build/$(2)/$(1).map -o $$@ $$(filter %.o,$$^)
 build/$(2)/$(1).app: build/$(2)/$(1).elf $(MB)/tools/stage2.py
 	$(OBJCOPY) -O binary -j .text $$< build/$(2)/$(1).raw
@@ -129,6 +134,17 @@ $(foreach a,$(UNIVERSAL_APPS) menu picker,$(eval $(call APP_template,$(a),any,,0
 build/%/MENU.BIN: build/%/menu.elf $(MB)/tools/stage2.py
 	$(OBJCOPY) -O binary -j .text $< build/$*/menu.raw
 	python3 $(MB)/tools/stage2.py build/$*/menu.raw $@
+# The FM-1 bootloader's USB DRIVE item loads /MBOOT/USB.BIN from a USB drive as stage 2 (m-bootloader's docs/SPEC.md
+# §11.5): usbflash, with its code in stage 2's 32 KiB at 0x01C28000, and its data and stacks above it, in RAM that's
+# stage 2's while it runs, up to the log. Its .dma may use stage 2's RAM from 0x01C0A800.
+build/fm1/usbflash/stage2.ld: kit/app.ld.S Makefile
+	@mkdir -p $(@D)
+	$(CLANG) -E -P -x c -DAPP_STACK=$(or $(usbflash_STACK),$(APP_STACK_DEFAULT)) -DAPP_ORIGIN=0x1c28000 -DAPP_LENGTH=0x57000 -DAPP_LOW=0x1c0a800 $< -o $@
+build/fm1/usbflash-stage2.elf: $(call app_objs,usbflash,fm1) build/fm1/usbflash/stage2.ld
+	$(LINK) --plugin-opt=O3 --relax --gc-sections -T build/fm1/usbflash/stage2.ld -Map build/fm1/usbflash-stage2.map -o $@ $(filter %.o,$^)
+build/fm1/USB.BIN: build/fm1/usbflash-stage2.elf $(MB)/tools/stage2.py
+	$(OBJCOPY) -O binary -j .text $< build/fm1/usbflash-stage2.raw
+	python3 $(MB)/tools/stage2.py build/fm1/usbflash-stage2.raw $@
 build/%/LAUNCH.BIN: build/%/picker.elf tools/launch.py
 	$(OBJCOPY) -O binary -j .text $< build/$*/picker.raw
 	python3 tools/launch.py $* build/$*/picker.raw $@
