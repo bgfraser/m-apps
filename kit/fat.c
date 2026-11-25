@@ -29,6 +29,14 @@ static unsigned per_cluster, fat_copies;
 static bool fat_dirty;
 static uint32_t cursor_start, cursor_index, cursor_cluster;
 static int freed;
+/* Where sectors come from: the card, unless an app gave another volume (fat_source()). */
+static bool (*sector_read)(uint32_t sector, uint8_t *data) = card_read;
+static bool (*sector_write)(uint32_t sector, const uint8_t *data) = card_write;
+
+void fat_source(bool (*read)(uint32_t sector, uint8_t *data), bool (*write)(uint32_t sector, const uint8_t *data)) {
+    sector_read = read ? read : card_read;
+    sector_write = write ? write : card_write;
+}
 
 static bool looks_fat32(const uint8_t *b) {
     unsigned per = b[13];
@@ -38,7 +46,7 @@ static bool looks_fat32(const uint8_t *b) {
 
 const char *fat_mount(uint32_t sectors) {
     uint32_t base = 0;
-    if (!card_read(0, block))
+    if (!sector_read(0, block))
         return READ_ERROR;
     if (!looks_fat32(block)) {
         if (core_le16(block+510) != 0xaa55)
@@ -46,7 +54,7 @@ const char *fat_mount(uint32_t sectors) {
         base = core_le32(block+454);
         if (base >= sectors)
             return NOT_FAT32;
-        if (!card_read(base, block))
+        if (!sector_read(base, block))
             return READ_ERROR;
         if (!looks_fat32(block))
             return NOT_FAT32;
@@ -71,7 +79,7 @@ const char *fat_mount(uint32_t sectors) {
     first_free = 2;
     freed = 0;
     if (info_sector) {
-        if (!card_read(info_sector, block))
+        if (!sector_read(info_sector, block))
             return READ_ERROR;
         uint32_t hint = core_le32(block+492);
         if (core_le32(block) == FSINFO_SIGNATURE && core_le32(block+484) == FSINFO_SIGNATURE2 && hint >= 2 && hint-2 < clusters)
@@ -97,7 +105,7 @@ static bool flush_fat(void) {
     if (!fat_dirty)
         return true;
     for (unsigned copy = 0; copy < fat_copies; ++copy)
-        if (!card_write(fat_cached+copy*fat_sectors, fat_block))
+        if (!sector_write(fat_cached+copy*fat_sectors, fat_block))
             return false;
     fat_dirty = false;
     return true;
@@ -110,7 +118,7 @@ static uint32_t next(uint32_t c) {
         if (!flush_fat())
             return 0;
         fat_cached = NO_SECTOR;
-        if (!card_read(sector, fat_block))
+        if (!sector_read(sector, fat_block))
             return 0;
         fat_cached = sector;
     }
@@ -316,7 +324,7 @@ static const char *walk(uint32_t c, void (*visit)(struct walk *, const uint8_t *
         for (unsigned s = 0; s < per_cluster; ++s) {
             w->previous = w->sector;
             w->sector = data_at+(c-2)*per_cluster+s;
-            if (!card_read(w->sector, block))
+            if (!sector_read(w->sector, block))
                 return READ_ERROR;
             for (unsigned at = 0; at < SECTOR; at += ENTRY) {
                 w->at = at;
@@ -417,10 +425,10 @@ bool fat_read(const struct fat_entry *file, uint32_t offset, void *to, uint32_t 
             part = n;
         if (part == SECTOR && !((uintptr_t)out&3)) {
             /* The card's DMA goes straight to the target. */
-            if (!card_read(sector, out))
+            if (!sector_read(sector, out))
                 return false;
         } else {
-            if (!card_read(sector, block))
+            if (!sector_read(sector, block))
                 return false;
             memcpy(out, block+in_sector, part);
         }
@@ -499,7 +507,7 @@ bool fat_write(uint32_t start, uint32_t offset, const void *from, uint32_t n) {
     }
     offset %= cluster_bytes;
     while (n) {
-        if (!card_write(data_at+(c-2)*per_cluster+offset/SECTOR, in))
+        if (!sector_write(data_at+(c-2)*per_cluster+offset/SECTOR, in))
             return false;
         in += SECTOR;
         offset += SECTOR;
@@ -551,7 +559,7 @@ static void put_entry(uint8_t *e, const char name[11], unsigned attributes, uint
 static const char *blank_cluster(uint32_t c) {
     memset(block, 0, SECTOR);
     for (unsigned s = 0; s < per_cluster; ++s)
-        if (!card_write(data_at+(c-2)*per_cluster+s, block))
+        if (!sector_write(data_at+(c-2)*per_cluster+s, block))
             return WRITE_ERROR;
     return 0;
 }
@@ -576,15 +584,15 @@ static const char *add_entries(uint32_t directory, unsigned n) {
                 /* Past the end, whatever is here was never part of the directory. */
                 memset(block, 0, SECTOR);
                 memcpy(block, added, n*ENTRY);
-                if (!card_write(sector, block))
+                if (!sector_write(sector, block))
                     return WRITE_ERROR;
-                if (!card_read(end_sector, block))
+                if (!sector_read(end_sector, block))
                     return READ_ERROR;
                 for (unsigned at = end_at; at < SECTOR; at += ENTRY)
                     block[at] = 0xe5;
-                return card_write(end_sector, block) ? 0:WRITE_ERROR;
+                return sector_write(end_sector, block) ? 0:WRITE_ERROR;
             }
-            if (!card_read(sector, block))
+            if (!sector_read(sector, block))
                 return READ_ERROR;
             unsigned run = 0;
             for (unsigned at = 0; at < SECTOR; at += ENTRY) {
@@ -608,11 +616,11 @@ static const char *add_entries(uint32_t directory, unsigned n) {
                     memcpy(block+first, added, n*ENTRY);
                     if (first+n*ENTRY < SECTOR)
                         memset(block+first+n*ENTRY, 0, SECTOR-first-n*ENTRY);
-                    return card_write(sector, block) ? 0:WRITE_ERROR;
+                    return sector_write(sector, block) ? 0:WRITE_ERROR;
                 }
                 if (++run == n) {
                     memcpy(block+first, added, n*ENTRY);
-                    return card_write(sector, block) ? 0:WRITE_ERROR;
+                    return sector_write(sector, block) ? 0:WRITE_ERROR;
                 }
             }
         }
@@ -637,15 +645,15 @@ static const char *add_entries(uint32_t directory, unsigned n) {
         return WRITE_ERROR;
     memset(block, 0, SECTOR);
     memcpy(block, added, n*ENTRY);
-    if (!card_write(data_at+(more-2)*per_cluster, block))
+    if (!sector_write(data_at+(more-2)*per_cluster, block))
         return WRITE_ERROR;
     if (!end_sector)
         return 0;
-    if (!card_read(end_sector, block))
+    if (!sector_read(end_sector, block))
         return READ_ERROR;
     for (unsigned at = end_at; at < SECTOR; at += ENTRY)
         block[at] = 0xe5;
-    return card_write(end_sector, block) ? 0:WRITE_ERROR;
+    return sector_write(end_sector, block) ? 0:WRITE_ERROR;
 }
 
 const char *fat_add(uint32_t directory, const char name[11], unsigned attributes, uint32_t start, uint32_t size) {
@@ -718,7 +726,7 @@ const char *fat_swap(uint32_t directory, const char name[11], uint32_t start, ui
     core_put_le16(e+20, (uint16_t)(start >> 16));
     core_put_le16(e+26, (uint16_t)start);
     core_put_le32(e+28, size);
-    if (!card_write(w.sector, block))
+    if (!sector_write(w.sector, block))
         return WRITE_ERROR;
     /* On a damaged card whose FAT had the old chain's first cluster free, fat_reserve() can have taken it for the new
      * one: freeing the old chain would free the new. (The old chain running into the new further on is possible on such
@@ -742,12 +750,12 @@ const char *fat_remove(uint32_t directory, const char name[11]) {
     for (; at >= ENTRY && block[at-ENTRY+11] == LONG_ATTRIBUTES && block[at-ENTRY] != 0xe5 && block[at-ENTRY+13] == sum;
          at -= ENTRY)
         block[at-ENTRY] = 0xe5;
-    if (!card_write(w.sector, block))
+    if (!sector_write(w.sector, block))
         return WRITE_ERROR;
     /* And those that start in the sector before, after the entry itself has gone: a cut between leaves pieces that
      * belong to nothing, which readers skip. */
     if (!at && w.previous && w.previous != w.sector) {
-        if (!card_read(w.previous, block))
+        if (!sector_read(w.previous, block))
             return READ_ERROR;
         bool changed = false;
         for (at = SECTOR; at >= ENTRY && block[at-ENTRY+11] == LONG_ATTRIBUTES && block[at-ENTRY] != 0xe5 &&
@@ -755,7 +763,7 @@ const char *fat_remove(uint32_t directory, const char name[11]) {
             block[at-ENTRY] = 0xe5;
             changed = true;
         }
-        if (changed && !card_write(w.previous, block))
+        if (changed && !sector_write(w.previous, block))
             return WRITE_ERROR;
     }
     return fat_release(w.found);
@@ -780,7 +788,7 @@ const char *fat_make_folder(uint32_t *cluster, const char name[11]) {
     memset(block, 0, SECTOR);
     put_entry(block, ".          ", FAT_ATTR_FOLDER, made, 0);
     put_entry(block+ENTRY, "..         ", FAT_ATTR_FOLDER, *cluster == root ? 0:*cluster, 0);
-    if (!card_write(data_at+(made-2)*per_cluster, block))
+    if (!sector_write(data_at+(made-2)*per_cluster, block))
         return WRITE_ERROR;
     error = fat_add(*cluster, name, FAT_ATTR_FOLDER, made, 0);
     if (error)
@@ -794,7 +802,7 @@ const char *fat_commit(void) {
         return WRITE_ERROR;
     if (!info_sector)
         return 0;
-    if (!card_read(info_sector, block))
+    if (!sector_read(info_sector, block))
         return READ_ERROR;
     if (core_le32(block) != FSINFO_SIGNATURE || core_le32(block+484) != FSINFO_SIGNATURE2)
         return 0;
@@ -803,5 +811,5 @@ const char *fat_commit(void) {
         core_put_le32(block+488, count+(uint32_t)freed);
     core_put_le32(block+492, first_free);
     freed = 0;
-    return card_write(info_sector, block) ? 0:WRITE_ERROR;
+    return sector_write(info_sector, block) ? 0:WRITE_ERROR;
 }

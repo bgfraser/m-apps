@@ -1,0 +1,3 @@
+name=USB Flasher
+about=Install firmware from a USB drive
+version=0.1

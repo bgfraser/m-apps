@@ -12,7 +12,7 @@ CFLAGS := -target pi32v2 -mcpu=r3 -std=c99 -Oz -ffreestanding -fno-builtin -fno-
 	-Wall -Wextra -Werror -flto -DRAM_STAGE -Ikit -I$(MB)/include
 # The drivers apps get from m-bootloader. --gc-sections drops what an app doesn't use.
 DRIVERS := core platform display board runtime usb_midi
-APPS := hello crashtest hangtest usbdisk slots tone mp3 jpeg wifi
+APPS := hello crashtest hangtest usbdisk slots tone mp3 jpeg wifi usbflash
 # Built once more as universal apps, in build/any.
 UNIVERSAL_APPS := hello usbdisk slots mp3 wifi
 # A stack for each app's C code. An app can override it: <name>_STACK := 0x8000
@@ -20,6 +20,8 @@ APP_STACK_DEFAULT := 0x4000
 # The decoder keeps about 16 KiB on the stack, and speed matters more than size for it.
 mp3_STACK := 0x8000
 mp3_CFLAGS := -O2 -Iapps/mp3
+# usbflash: M-Unbricker's USB host driver and bulk-only transport, from the m-unbricker submodule (apps/usbflash/stick.h).
+usbflash_CFLAGS := -Im-unbricker/src -Im-unbricker/src/mbl
 # WiFi: the radio's headers and Optimist's stack, from fm1-base (apps/wifi/bsp/README.md), in their own C. The key's
 # 4096 SHA-1 rounds and the crypto want speed.
 wifi_CFLAGS := -O2 -std=gnu99 -Iapps/wifi -Iapps/wifi/bsp -DWC_SHA1_HW=sha1_hw_block $(WIFI_TEST)
@@ -59,6 +61,7 @@ test:
 	python3 tests/wifi_list_test.py
 	python3 tests/wifi_screens_test.py
 	python3 tests/jpeg_parse_test.py
+	python3 tests/usbflash_test.py
 
 # make fuzz: the parsers of what comes from a card or the radio, fuzzed for FUZZ_SECONDS each (tests/fuzz_test.py). Needs
 # clang with libFuzzer (Debian: clang, libclang-rt-dev); without it, it says so and passes.

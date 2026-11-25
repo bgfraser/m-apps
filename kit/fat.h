@@ -10,6 +10,9 @@ struct fat_entry {
     char name[8];
     uint32_t start, size;
 };
+/* The volume's sectors come from the SD card (kit/card.h) unless an app gives its own here, before fat_mount(): a USB
+ * drive, say. 0 for either puts the card's back. Sectors are 512 bytes. */
+void fat_source(bool (*read)(uint32_t sector, uint8_t *data), bool (*write)(uint32_t sector, const uint8_t *data));
 /* The card's size in sectors, from card_start(). */
 const char *fat_mount(uint32_t sectors);
 /* The root directory's cluster. */

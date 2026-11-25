@@ -207,6 +207,18 @@ A slot is `/MBOOT/SLOTS/FM1/` or `/MBOOT/SLOTS/SMK37/`, then `<its name>.slt`, s
 
 The card is written in an order where losing power leaves, at worst, clusters no file uses, which `fsck` can reclaim. The guard stays on while flash is written, unlike what `AGENTS.md` says for other apps, as each sector feeds it. So only a real hang reaches it, and then the unit ends in download mode.
 
+### usbflash
+
+Installs firmware from a USB flash drive, with no computer: the unit becomes a USB host on its USB-C port. **Not yet run on hardware.** The drive needs 5 V from elsewhere, such as a Y-cable with a power injector, as the unit doesn't supply VBUS. The drive has to be FAT32 with 512-byte sectors, in its first partition or with no partition table.
+
+- **The list** has the `.fwsc` packages, then the `.bin` flash images, in `/`, `/FIRMWARE` and `/DOCK`, by the names a computer shows. OCT- and OCT+ choose, PLAY opens, REC leaves.
+- **A `.fwsc`** is an M-UPGRADE package, as Felucca-family firmware ships: what's installed is its `flash.bin`. **A `.bin`** is a raw flash image from address `0`, such as an M-Flasher backup.
+- **It checks everything before erasing anything,** by the rules of m-bootloader's MIDI mode (its SPEC §11.6): whole 4 KiB sectors, the firmware's first record decrypting with this unit's chip key, every file of the firmware passing the bootloader's own check, and the package's CRC. Then it says how many sectors differ, and PLAY held for 2 s writes them.
+- **What it writes** is `0x4000` up to the image's end, at most the key area at `0xFF000`, and on the SMK-37 never `0xC0000`-`0xC1FFF`. The boot area is never written. The firmware's first sector is erased first and written last, so until the end the bootloader won't start what's there. Each sector is read again, checked against the CRC from the first read, written and read back. Then it checks the installed firmware as the bootloader will, and restarts.
+- **If a write fails** (the drive pulled, say), it offers to try again. Leaving restarts the unit, and m-bootloader, finding no firmware it can start, opens MIDI mode.
+
+`apps/usbflash/stick.c` is the drive: M-Unbricker's host driver and bulk-only transport (`m-unbricker/src/husb.c`, `bot.c`), with TEST UNIT READY, INQUIRY, READ CAPACITY and READ (10). `package.c` reads packages and installs, and `files.c` lists the files; both are portable, and `tests/usbflash_test.py` runs them on FAT32 drive images it builds, against a simulated flash chip that refuses anything an install must never do.
+
 ### usbdisk
 
 Shows the unit's SD card to the computer as a USB disk, so files can be copied without taking the card out. It needs a card mod, and has run on an FM-1 and an SMK-37.
